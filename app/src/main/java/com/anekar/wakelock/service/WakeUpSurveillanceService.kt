@@ -1,5 +1,7 @@
 package com.anekar.wakelock.service
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -29,9 +31,9 @@ class WakeUpSurveillanceService : Service() {
     private var alarmId: Long = -1L
     private var intervalSeconds: Int = 600
     private var totalDurationSeconds: Int = 7200
-    private var surveillanceStartTime: Long = 0L
-    private var isAwaitingResponse: Boolean = false
+    private var totalChecksCount: Int = 1
     private var currentCheckIndex: Int = 1
+    private var isAwaitingResponse: Boolean = false
 
     companion object {
         const val ACTION_START_SURVEILLANCE = "ACTION_START_SURVEILLANCE"
@@ -44,10 +46,14 @@ class WakeUpSurveillanceService : Service() {
         super.onCreate()
         audioHijackManager = AudioHijackManager(this)
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        // पूरे सर्विलांस के दौरान CPU स्लीप को ब्लॉक रखने के लिए लगातार WakeLock
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
-            "WAKELOCK::SurveillanceWakeLock"
-        )
+            "WAKELOCK::SurveillancePersistentWakeLock"
+        ).apply {
+            setReferenceCounted(false)
+            acquire(6 * 60 * 60 * 1000L) // 6 घंटे तक सुरक्षित लॉक
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -63,8 +69,15 @@ class WakeUpSurveillanceService : Service() {
             ACTION_CONFIRM_AWAKE -> {
                 isAwaitingResponse = false
                 handler.removeCallbacks(penaltyEscalationRunnable)
+                
+                // अगला चेक शेड्यूल करना
                 currentCheckIndex++
-                scheduleNextCheck()
+                if (currentCheckIndex <= totalChecksCount) {
+                    scheduleNextCheck()
+                } else {
+                    // सभी चेक पूरे हो गए -> सेशन सफलतापूर्वक समाप्त
+                    terminateSurveillance()
+                }
             }
             ACTION_CANCEL_SURVEILLANCE -> {
                 terminateSurveillance()
@@ -77,7 +90,7 @@ class WakeUpSurveillanceService : Service() {
         val notification = NotificationCompat.Builder(this, NotificationHelper.CHANNEL_SURVEILLANCE_ID)
             .setSmallIcon(R.drawable.ic_lock_alarm)
             .setContentTitle("WAKELOCK // SURVEILLANCE ARMED")
-            .setContentText("Monitoring wakefulness cycle. Next check approaching.")
+            .setContentText("Active awake surveillance cycle in progress.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .build()
@@ -101,48 +114,42 @@ class WakeUpSurveillanceService : Service() {
 
             intervalSeconds = alarm.wakeUpIntervalSeconds
             totalDurationSeconds = alarm.wakeUpTotalDurationSeconds
-            surveillanceStartTime = System.currentTimeMillis()
-            val surveillanceEndTime = surveillanceStartTime + (totalDurationSeconds * 1000L)
-            val nextCheckTime = surveillanceStartTime + (intervalSeconds * 1000L)
+            // सटीक अनुपात: जितने चेक बनते हैं, ठीक उतने ही चलेंगे
+            totalChecksCount = (totalDurationSeconds / intervalSeconds).coerceAtLeast(1)
+
+            val startTime = System.currentTimeMillis()
+            val endTime = startTime + (totalDurationSeconds * 1000L)
 
             db.alarmDao().updateSurveillanceState(
                 id = alarmId,
                 isActive = true,
-                startTime = surveillanceStartTime,
-                endTime = surveillanceEndTime,
-                nextCheck = nextCheckTime
+                startTime = startTime,
+                endTime = endTime,
+                nextCheck = startTime + (intervalSeconds * 1000L)
             )
 
-            handler.postDelayed(surveillanceRunnable, intervalSeconds * 1000L)
+            scheduleNextCheck()
         }
     }
 
-    private val surveillanceRunnable = object : Runnable {
-        override fun run() {
-            val now = System.currentTimeMillis()
-            val elapsedSec = (now - surveillanceStartTime) / 1000L
+    private fun scheduleNextCheck() {
+        handler.removeCallbacks(checkTriggerRunnable)
+        handler.postDelayed(checkTriggerRunnable, intervalSeconds * 1000L)
+    }
 
-            if (elapsedSec >= totalDurationSeconds) {
-                terminateSurveillance()
-                return
-            }
-
-            triggerCheckAlert()
-        }
+    private val checkTriggerRunnable = Runnable {
+        triggerCheckAlert()
     }
 
     private fun triggerCheckAlert() {
-        wakeLock?.acquire(35 * 1000L)
         audioHijackManager.playDoubleBeep()
         isAwaitingResponse = true
-
-        val totalChecks = (totalDurationSeconds / intervalSeconds).coerceAtLeast(1)
 
         val checkIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
             putExtra("ALARM_ID", alarmId)
             putExtra("IS_WAKEUP_CHECK", true)
             putExtra("CURRENT_CHECK", currentCheckIndex)
-            putExtra("TOTAL_CHECKS", totalChecks)
+            putExtra("TOTAL_CHECKS", totalChecksCount)
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -151,6 +158,7 @@ class WakeUpSurveillanceService : Service() {
         }
         startActivity(checkIntent)
 
+        // 30 सेकंड में रिस्पॉन्स न मिलने पर अलार्म सायरन ब्लास्ट
         handler.postDelayed(penaltyEscalationRunnable, 30 * 1000L)
     }
 
@@ -162,21 +170,6 @@ class WakeUpSurveillanceService : Service() {
             }
             startService(alarmServiceIntent)
         }
-    }
-
-    private fun scheduleNextCheck() {
-        val nextCheckMillis = System.currentTimeMillis() + (intervalSeconds * 1000L)
-        CoroutineScope(Dispatchers.IO).launch {
-            val db = WakelockDatabase.getDatabase(applicationContext)
-            db.alarmDao().updateSurveillanceState(
-                id = alarmId,
-                isActive = true,
-                startTime = surveillanceStartTime,
-                endTime = surveillanceStartTime + (totalDurationSeconds * 1000L),
-                nextCheck = nextCheckMillis
-            )
-        }
-        handler.postDelayed(surveillanceRunnable, intervalSeconds * 1000L)
     }
 
     private fun terminateSurveillance() {
