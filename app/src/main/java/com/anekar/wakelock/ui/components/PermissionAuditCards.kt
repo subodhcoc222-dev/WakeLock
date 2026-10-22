@@ -74,7 +74,6 @@ fun checkPermissions(context: Context): PermissionState {
         ) == PackageManager.PERMISSION_GRANTED
     } else true
 
-    // Detect if AntiForceStop Accessibility Service is active
     val expectedServiceName = "${context.packageName}/${AntiForceStopService::class.java.canonicalName}"
     val enabledServices = Settings.Secure.getString(
         context.contentResolver,
@@ -98,9 +97,7 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
     val context = LocalContext.current
 
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
@@ -164,7 +161,7 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
             }
         }
 
-        // 4. Accessibility Service Card (Anti-Force Stop)
+        // 4. Accessibility Service Card
         AnimatedVisibility(visible = !state.hasAccessibility, exit = fadeOut() + shrinkVertically()) {
             AuditCard(
                 title = "ACCESSIBILITY (ANTI-FORCE STOP)",
@@ -176,7 +173,7 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
             }
         }
 
-        // 5. Notifications Card (Android 13+)
+        // 5. Notifications Card
         AnimatedVisibility(visible = !state.hasNotification, exit = fadeOut() + shrinkVertically()) {
             AuditCard(
                 title = "NOTIFICATION PERMISSION",
@@ -190,21 +187,76 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
             }
         }
 
-        // 6. OEM Auto-Start & Background Activity Card
+        // 6. OEM Auto-Start & Background Activity Card (2-Step Explicit Confirmation)
         AnimatedVisibility(visible = !state.isAutoStartAcknowledged, exit = fadeOut() + shrinkVertically()) {
-            AuditCard(
-                title = "AUTO-LAUNCH / AUTO-START [CRITICAL]",
-                description = "Reboot trap ke liye zaroori: App Info > 'Auto-launch' ya 'Allow background activity' ko ON karein.",
-                actionText = "OPEN APP SETTINGS & VERIFY"
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, SubtleBorder, RoundedCornerShape(8.dp)),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(8.dp)
             ) {
-                val prefs = context.getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-                prefs.edit().putBoolean("autostart_ack", true).apply()
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "AUTO-LAUNCH / AUTO-START [CRITICAL]",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = ThreatCrimson
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Step 1: Settings me jakar Auto-start / Background activity ON karein.\nStep 2: ON karne ke baad neeche confirm karein.",
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(intent)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .border(1.dp, SubtleBorder, RoundedCornerShape(6.dp))
+                        ) {
+                            Text(
+                                text = "1. OPEN SETTINGS",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                        }
 
-                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.parse("package:${context.packageName}")
+                        Button(
+                            onClick = {
+                                val prefs = context.getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                                prefs.edit().putBoolean("autostart_ack", true).apply()
+                                onRefresh()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = LaserGreen),
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = "2. I HAVE ENABLED",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = PureBlack
+                            )
+                        }
+                    }
                 }
-                context.startActivity(intent)
-                onRefresh()
             }
         }
 
