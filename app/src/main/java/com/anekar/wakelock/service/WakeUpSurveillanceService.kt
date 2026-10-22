@@ -31,6 +31,7 @@ class WakeUpSurveillanceService : Service() {
     private var totalDurationSeconds: Int = 7200
     private var surveillanceStartTime: Long = 0L
     private var isAwaitingResponse: Boolean = false
+    private var currentCheckIndex: Int = 1
 
     companion object {
         const val ACTION_START_SURVEILLANCE = "ACTION_START_SURVEILLANCE"
@@ -55,12 +56,14 @@ class WakeUpSurveillanceService : Service() {
         when (action) {
             ACTION_START_SURVEILLANCE -> {
                 alarmId = intent?.getLongExtra(EXTRA_ALARM_ID, -1L) ?: -1L
+                currentCheckIndex = 1
                 startSurveillanceForeground()
                 loadAlarmAndBeginSurveillance()
             }
             ACTION_CONFIRM_AWAKE -> {
                 isAwaitingResponse = false
                 handler.removeCallbacks(penaltyEscalationRunnable)
+                currentCheckIndex++
                 scheduleNextCheck()
             }
             ACTION_CANCEL_SURVEILLANCE -> {
@@ -110,7 +113,7 @@ class WakeUpSurveillanceService : Service() {
                 nextCheck = nextCheckTime
             )
 
-            handler.post(surveillanceRunnable)
+            handler.postDelayed(surveillanceRunnable, intervalSeconds * 1000L)
         }
     }
 
@@ -133,9 +136,13 @@ class WakeUpSurveillanceService : Service() {
         audioHijackManager.playDoubleBeep()
         isAwaitingResponse = true
 
+        val totalChecks = (totalDurationSeconds / intervalSeconds).coerceAtLeast(1)
+
         val checkIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
             putExtra("ALARM_ID", alarmId)
             putExtra("IS_WAKEUP_CHECK", true)
+            putExtra("CURRENT_CHECK", currentCheckIndex)
+            putExtra("TOTAL_CHECKS", totalChecks)
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
