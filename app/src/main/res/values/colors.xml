@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Background & Surface -->
+    <color name="color_pure_black">#000000</color>
+    <color name="color_surface_dark">#0D0D0E</color>
+    <color name="color_surface_elevated">#141416</color>
+    <color name="color_border_subtle">#242428</color>
+
+    <!-- Accents & Functional States -->
+    <color name="color_laser_green">#30D158</color>
+    <color name="color_threat_crimson">#FF3B30</color>
+    <color name="color_warning_amber">#FFD60A</color>
+
+    <!-- Typography -->
+    <color name="color_text_primary">#F5F5F7</color>
+    <color name="color_text_secondary">#8E8E93</color>
+    <color name="color_text_muted">#48484A</color>
+</resources>
