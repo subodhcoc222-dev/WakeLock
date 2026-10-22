@@ -1,5 +1,6 @@
 package com.anekar.wakelock.service
 
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -45,7 +46,10 @@ class PunishmentGauntletService : Service() {
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "WAKELOCK::PunishmentWakeLock"
-        )
+        ).apply {
+            setReferenceCounted(false)
+            acquire(punishmentDurationMillis)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -54,6 +58,12 @@ class PunishmentGauntletService : Service() {
         when (action) {
             ACTION_START_PUNISHMENT -> {
                 alarmId = intent?.getLongExtra(EXTRA_ALARM_ID, -1L) ?: -1L
+                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putBoolean("is_punishment_active", true)
+                    .putLong("active_alarm_id", alarmId)
+                    .apply()
+
                 startPunishmentForeground()
                 initiatePunishmentCycle()
             }
@@ -69,12 +79,32 @@ class PunishmentGauntletService : Service() {
     }
 
     private fun startPunishmentForeground() {
+        val fullScreenIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
+            putExtra("ALARM_ID", alarmId)
+            putExtra("IS_PUNISHMENT", true)
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+        }
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            this,
+            NotificationHelper.NOTIFICATION_PUNISHMENT_ID,
+            fullScreenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification = NotificationCompat.Builder(this, NotificationHelper.CHANNEL_PUNISHMENT_ID)
             .setSmallIcon(R.drawable.ic_lock_alarm)
             .setContentTitle("WAKELOCK // 6-HR TAMPER GAUNTLET")
             .setContentText("REBOOT EVASION DETECTED. 5-minute math enforcement active.")
             .setColor(0xFFFF3B30.toInt())
             .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setContentIntent(fullScreenPendingIntent)
             .setOngoing(true)
             .build()
 
@@ -108,7 +138,6 @@ class PunishmentGauntletService : Service() {
     }
 
     private fun triggerPunishmentAlarm() {
-        wakeLock?.acquire(45 * 1000L)
         audioHijackManager.startAlarmTone(null)
 
         val triggerIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
@@ -126,9 +155,18 @@ class PunishmentGauntletService : Service() {
     private fun terminatePunishment() {
         handler.removeCallbacksAndMessages(null)
         audioHijackManager.stopAlarmTone()
+
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putBoolean("is_punishment_active", false)
+            .putBoolean("is_alarm_active", false)
+            .putBoolean("is_surveillance_active", false)
+            .apply()
+
         CoroutineScope(Dispatchers.IO).launch {
             val db = WakelockDatabase.getDatabase(applicationContext)
             db.alarmDao().updatePunishmentState(alarmId, false, 0L)
+            db.alarmDao().updateSurveillanceState(alarmId, false, 0L, 0L, 0L)
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
