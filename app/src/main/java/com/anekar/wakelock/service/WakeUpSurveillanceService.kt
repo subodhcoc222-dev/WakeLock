@@ -124,7 +124,6 @@ class WakeUpSurveillanceService : Service() {
                 return
             }
 
-            // Fire Check Alert
             triggerCheckAlert()
         }
     }
@@ -137,19 +136,19 @@ class WakeUpSurveillanceService : Service() {
         val checkIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
             putExtra("ALARM_ID", alarmId)
             putExtra("IS_WAKEUP_CHECK", true)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
         }
         startActivity(checkIntent)
 
-        // 30 seconds window to click "I am awake"
         handler.postDelayed(penaltyEscalationRunnable, 30 * 1000L)
     }
 
     private val penaltyEscalationRunnable = Runnable {
         if (isAwaitingResponse) {
-            // Missed wake up check -> Escalates to Full Alarm & Math Mission
             val alarmServiceIntent = Intent(this, AlarmForegroundService::class.java).apply {
                 action = AlarmForegroundService.ACTION_START_ALARM
                 putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarmId)
