@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.anekar.wakelock.receiver.WakelockAdminReceiver
+import com.anekar.wakelock.service.AntiForceStopService
 import com.anekar.wakelock.ui.theme.*
 
 data class PermissionState(
@@ -37,10 +38,11 @@ data class PermissionState(
     val hasBatteryOpt: Boolean,
     val hasDeviceAdmin: Boolean,
     val hasNotification: Boolean,
+    val hasAccessibility: Boolean,
     val isAutoStartAcknowledged: Boolean
 ) {
     val isAllGranted: Boolean
-        get() = hasOverlay && hasExactAlarm && hasBatteryOpt && hasDeviceAdmin && hasNotification && isAutoStartAcknowledged
+        get() = hasOverlay && hasExactAlarm && hasBatteryOpt && hasDeviceAdmin && hasNotification && hasAccessibility && isAutoStartAcknowledged
 }
 
 fun checkPermissions(context: Context): PermissionState {
@@ -72,12 +74,21 @@ fun checkPermissions(context: Context): PermissionState {
         ) == PackageManager.PERMISSION_GRANTED
     } else true
 
+    // Detect if AntiForceStop Accessibility Service is active
+    val expectedServiceName = "${context.packageName}/${AntiForceStopService::class.java.canonicalName}"
+    val enabledServices = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ) ?: ""
+    val hasAccessibility = enabledServices.contains(expectedServiceName)
+
     return PermissionState(
         hasOverlay,
         hasExactAlarm,
         hasBatteryOpt,
         hasDeviceAdmin,
         hasNotification,
+        hasAccessibility,
         isAutoStartAck
     )
 }
@@ -153,7 +164,19 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
             }
         }
 
-        // 4. Notifications Card (Android 13+)
+        // 4. Accessibility Service Card (Anti-Force Stop)
+        AnimatedVisibility(visible = !state.hasAccessibility, exit = fadeOut() + shrinkVertically()) {
+            AuditCard(
+                title = "ACCESSIBILITY (ANTI-FORCE STOP)",
+                description = "Settings me jakar app ko forcefully band (Force Stop) karne se rokta hai.",
+                actionText = "ENABLE IN ACCESSIBILITY"
+            ) {
+                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                context.startActivity(intent)
+            }
+        }
+
+        // 5. Notifications Card (Android 13+)
         AnimatedVisibility(visible = !state.hasNotification, exit = fadeOut() + shrinkVertically()) {
             AuditCard(
                 title = "NOTIFICATION PERMISSION",
@@ -167,7 +190,7 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
             }
         }
 
-        // 5. OEM Auto-Start & Background Activity Card
+        // 6. OEM Auto-Start & Background Activity Card
         AnimatedVisibility(visible = !state.isAutoStartAcknowledged, exit = fadeOut() + shrinkVertically()) {
             AuditCard(
                 title = "AUTO-LAUNCH / AUTO-START [CRITICAL]",
@@ -177,7 +200,6 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
                 val prefs = context.getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
                 prefs.edit().putBoolean("autostart_ack", true).apply()
 
-                // Direct jump to App Details settings
                 val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                     data = Uri.parse("package:${context.packageName}")
                 }
