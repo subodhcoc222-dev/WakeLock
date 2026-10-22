@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.anekar.wakelock.data.database.WakelockDatabase
 import com.anekar.wakelock.data.model.AlarmEntity
 import com.anekar.wakelock.data.model.MissionDifficulty
-import com.anekar.wakelock.data.security.SecurityManager
+import com.anekar.wakelock.data.WakelockSecurity
 import com.anekar.wakelock.receiver.AlarmScheduler
 import com.anekar.wakelock.ui.components.PermissionAuditCards
 import com.anekar.wakelock.ui.components.checkPermissions
@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
                 var showSplash by remember { mutableStateOf(true) }
 
                 LaunchedEffect(Unit) {
-                    delay(1200) // 1.2s Branded Splash Fade
+                    delay(1200)
                     showSplash = false
                 }
 
@@ -80,7 +80,7 @@ fun SplashScreen() {
                 letterSpacing = 4.sp
             )
             Spacer(modifier = Modifier.height(12.dp))
-            Divider(
+            HorizontalDivider(
                 modifier = Modifier.width(180.dp),
                 color = SubtleBorder,
                 thickness = 1.dp
@@ -150,7 +150,6 @@ fun MainDashboardScreen() {
                 .padding(padding)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
-            // App Header Bar
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -190,12 +189,10 @@ fun MainDashboardScreen() {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Dynamic Permissions Section
             PermissionAuditCards(state = permissionState, onRefresh = { refreshAlarms() })
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Alarms Protocol List
             if (alarms.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -250,7 +247,6 @@ fun MainDashboardScreen() {
             }
         }
 
-        // Master PIN Prompt Dialog
         selectedAlarmForPin?.let { alarm ->
             MasterPinVerificationDialog(
                 correctHash = alarm.masterPinHash,
@@ -266,7 +262,6 @@ fun MainDashboardScreen() {
             )
         }
 
-        // Add Alarm Protocol Bottom Sheet
         if (showAddDialog) {
             AddProtocolDialog(
                 onDismiss = { showAddDialog = false },
@@ -346,7 +341,6 @@ fun AlarmProtocolCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Metadata Chips
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -400,7 +394,6 @@ fun AddProtocolDialog(
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
-                    // Time Selector (12-Hour AM/PM)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -429,10 +422,9 @@ fun AddProtocolDialog(
                 }
 
                 item {
-                    // Math Difficulty Selector
                     Text("MATH MISSION DIFFICULTY", fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
-                    MissionDifficulty.values().forEach { diff ->
+                    MissionDifficulty.entries.forEach { diff ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -451,7 +443,6 @@ fun AddProtocolDialog(
                 }
 
                 item {
-                    // Wake-Up Surveillance Matrix (Including 30s & 1m Testing Presets)
                     Text("WAKE-UP CHECK INTERVAL", fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
                     val intervals = listOf(30 to "30s (Test)", 60 to "1m (Test)", 300 to "5m", 600 to "10m")
@@ -490,7 +481,6 @@ fun AddProtocolDialog(
                 }
 
                 item {
-                    // Master PIN Setup
                     Text("SET MASTER PIN (4-8 DIGITS)", fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
                     OutlinedTextField(
@@ -542,7 +532,7 @@ fun AddProtocolDialog(
                             timeoutSeconds = difficulty.defaultTimeoutSec,
                             wakeUpIntervalSeconds = wakeIntervalSec,
                             wakeUpTotalDurationSeconds = wakeDurationSec,
-                            masterPinHash = SecurityManager.hashPin(masterPin)
+                            masterPinHash = WakelockSecurity.hashPin(masterPin)
                         )
                         onSave(newAlarm)
                     }
