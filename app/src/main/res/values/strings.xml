@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">WAKELOCK</string>
+    <string name="creator_signature">ENGINEERED BY SUBODH ANEKAR</string>
+    <string name="app_version_tag">v1.0 // TAMPER-PROOF PROTOCOL</string>
+    
+    <!-- Device Admin Strings -->
+    <string name="device_admin_label">WAKELOCK Anti-Tamper Security</string>
+    <string name="device_admin_description">Enforces strict alarm completion and prevents unauthorized uninstallation during active monitoring.</string>
+
+    <!-- Notification Strings -->
+    <string name="channel_alarm_name">WAKELOCK Active Alarms</string>
+    <string name="channel_alarm_desc">High-priority full volume alarm audio and screens</string>
+    <string name="channel_surveillance_name">Wake-Up Surveillance</string>
+    <string name="channel_surveillance_desc">Periodic checks to ensure the user stays awake</string>
+    <string name="channel_punishment_name">Punishment Gauntlet</string>
+    <string name="channel_punishment_desc">Active anti-tamper penalty countdown and alarm cycle</string>
+</resources>
