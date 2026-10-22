@@ -36,7 +36,7 @@ class AlarmForegroundService : Service() {
             "WAKELOCK::AlarmServiceWakeLock"
         ).apply {
             setReferenceCounted(false)
-            acquire(30 * 60 * 1000L) // 30 mins safety limit
+            acquire(30 * 60 * 1000L)
         }
     }
 
@@ -69,7 +69,6 @@ class AlarmForegroundService : Service() {
                     audioHijackManager.startAlarmTone(alarm?.ringtoneUri)
                 }
 
-                // Force launch full screen UI
                 val triggerIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
                     putExtra("ALARM_ID", alarmId)
                     putExtra("IS_PUNISHMENT", false)
