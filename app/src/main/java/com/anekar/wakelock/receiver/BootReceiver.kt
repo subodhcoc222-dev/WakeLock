@@ -13,11 +13,11 @@ import kotlinx.coroutines.launch
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
-        val action = intent?.action ?: return
-        if (action == Intent.ACTION_BOOT_COMPLETED ||
-            action == "android.intent.action.QUICKBOOT_POWERON" ||
-            action == "com.htc.intent.action.QUICKBOOT_POWERON" ||
-            action == Intent.ACTION_REBOOT
+        val receivedAction = intent?.action ?: return
+        if (receivedAction == Intent.ACTION_BOOT_COMPLETED ||
+            receivedAction == "android.intent.action.QUICKBOOT_POWERON" ||
+            receivedAction == "com.htc.intent.action.QUICKBOOT_POWERON" ||
+            receivedAction == Intent.ACTION_REBOOT
         ) {
             val pendingResult = goAsync()
 
@@ -46,7 +46,7 @@ class BootReceiver : BroadcastReceiver() {
                         }
 
                         val punishmentIntent = Intent(context, PunishmentGauntletService::class.java).apply {
-                            action = PunishmentGauntletService.ACTION_START_PUNISHMENT
+                            setAction(PunishmentGauntletService.ACTION_START_PUNISHMENT)
                             putExtra(PunishmentGauntletService.EXTRA_ALARM_ID, targetId)
                         }
                         ContextCompat.startForegroundService(context, punishmentIntent)
