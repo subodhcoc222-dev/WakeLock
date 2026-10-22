@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.ServiceCompat
 import com.anekar.wakelock.data.database.WakelockDatabase
+import com.anekar.wakelock.receiver.AlarmReceiver
 import com.anekar.wakelock.service.audio.AudioHijackManager
 import com.anekar.wakelock.ui.AlarmTriggerActivity
 import com.anekar.wakelock.util.NotificationHelper
@@ -40,6 +41,8 @@ class AlarmForegroundService : Service() {
             setReferenceCounted(false)
             acquire(30 * 60 * 1000L)
         }
+
+        AlarmReceiver.releaseWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
