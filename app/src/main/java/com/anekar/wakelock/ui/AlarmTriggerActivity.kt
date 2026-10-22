@@ -46,12 +46,12 @@ import kotlinx.coroutines.withContext
 
 class AlarmTriggerActivity : ComponentActivity() {
 
-    private var alarmId: Long = -1L
-    private var isWakeUpCheck: Boolean = false
-    private var isPunishment: Boolean = false
-    private var currentCheckNumber: Int = 1
-    private var totalChecksNumber: Int = 1
-    private var currentAlarm: AlarmEntity? = null
+    private var alarmId by mutableLongStateOf(-1L)
+    private var isWakeUpCheck by mutableStateOf(false)
+    private var isPunishment by mutableStateOf(false)
+    private var currentCheckNumber by mutableIntStateOf(1)
+    private var totalChecksNumber by mutableIntStateOf(1)
+    private var currentAlarm by mutableStateOf<AlarmEntity?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,25 +67,39 @@ class AlarmTriggerActivity : ComponentActivity() {
             WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
 
-        alarmId = intent.getLongExtra("ALARM_ID", -1L)
-        isWakeUpCheck = intent.getBooleanExtra("IS_WAKEUP_CHECK", false)
-        isPunishment = intent.getBooleanExtra("IS_PUNISHMENT", false)
-        currentCheckNumber = intent.getIntExtra("CURRENT_CHECK", 1)
-        totalChecksNumber = intent.getIntExtra("TOTAL_CHECKS", 1)
+        handleIncomingIntent(intent)
 
         setContent {
             WakelockTheme {
                 TriggerScreenContent()
             }
         }
-
-        loadAlarmData()
     }
 
-    private fun loadAlarmData() {
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent?.let { handleIncomingIntent(it) }
+    }
+
+    private fun handleIncomingIntent(intent: Intent) {
+        alarmId = intent.getLongExtra("ALARM_ID", -1L)
+        isWakeUpCheck = intent.getBooleanExtra("IS_WAKEUP_CHECK", false)
+        isPunishment = intent.getBooleanExtra("IS_PUNISHMENT", false)
+        currentCheckNumber = intent.getIntExtra("CURRENT_CHECK", 1)
+        totalChecksNumber = intent.getIntExtra("TOTAL_CHECKS", 1)
+
+        loadAlarmData(alarmId)
+    }
+
+    private fun loadAlarmData(targetId: Long) {
         CoroutineScope(Dispatchers.IO).launch {
             val db = WakelockDatabase.getDatabase(applicationContext)
-            val alarm = db.alarmDao().getAlarmById(alarmId)
+            var alarm = if (targetId > 0) db.alarmDao().getAlarmById(targetId) else null
+            if (alarm == null) {
+                // Fallback: DB me se pehla alarm uthao taaki buffer screen kabhi na ruke
+                alarm = db.alarmDao().getAllAlarms().firstOrNull()
+            }
             withContext(Dispatchers.Main) {
                 currentAlarm = alarm
             }
@@ -97,7 +111,19 @@ class AlarmTriggerActivity : ComponentActivity() {
         val alarm = currentAlarm
 
         if (isWakeUpCheck) {
-            WakeUpCheckScreen(currentCheckNumber, totalChecksNumber)
+            WakeUpCheckScreen(
+                currentCheck = currentCheckNumber,
+                totalChecks = totalChecksNumber,
+                onTimeout = {
+                    // 30s khatam: turant red alarm screen me convert ho jao
+                    isWakeUpCheck = false
+                    val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                        action = AlarmForegroundService.ACTION_START_ALARM
+                        putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm?.id ?: alarmId)
+                    }
+                    startService(sirenIntent)
+                }
+            )
         } else if (alarm != null) {
             AlarmWorkflowScreen(alarm)
         } else {
@@ -120,7 +146,7 @@ class AlarmTriggerActivity : ComponentActivity() {
             RingingAlarmScreen(
                 onDismiss = {
                     isDismissedToMission = true
-                    // पहली बार म्यूट: शांति से हल करने की शुरुआत
+                    // Pehli baar mute: shanti se solve karne ke liye
                     val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
                         action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
                     }
@@ -160,7 +186,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                     text = "CRITICAL ALARM ACTIVE",
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
+                    fontSize = 18.sp,
                     color = ThreatCrimson,
                     letterSpacing = 2.sp
                 )
@@ -176,7 +202,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                 Button(
                     onClick = onDismiss,
                     modifier = Modifier
-                        .size(230.dp)
+                        .size(240.dp)
                         .scale(pulseScale),
                     shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = ThreatCrimson)
@@ -195,8 +221,19 @@ class AlarmTriggerActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun WakeUpCheckScreen(currentCheck: Int, totalChecks: Int) {
+    private fun WakeUpCheckScreen(currentCheck: Int, totalChecks: Int, onTimeout: () -> Unit) {
         val remainingChecks = (totalChecks - currentCheck).coerceAtLeast(0)
+        var checkTimeLeft by remember { mutableIntStateOf(30) }
+
+        // 30 Seconds Visible Countdown
+        LaunchedEffect(Unit) {
+            while (checkTimeLeft > 0) {
+                delay(1000L)
+                checkTimeLeft--
+            }
+            onTimeout()
+        }
+
         val infiniteTransition = rememberInfiniteTransition(label = "pulse")
         val scale by infiniteTransition.animateFloat(
             initialValue = 0.95f,
@@ -227,21 +264,42 @@ class AlarmTriggerActivity : ComponentActivity() {
                     color = LaserGreen,
                     letterSpacing = 1.5.sp
                 )
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = "CHECK $currentCheck OF $totalChecks",
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 22.sp,
+                    fontSize = 24.sp,
                     color = TextPrimary
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = "REMAINING CHECKS: $remainingChecks",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
                     color = WarningAmber
                 )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Visual Timer & Progress Bar
+                Text(
+                    text = "TIME TO CONFIRM: ${checkTimeLeft}s",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (checkTimeLeft <= 10) ThreatCrimson else LaserGreen
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { checkTimeLeft / 30f },
+                    modifier = Modifier
+                        .fillMaxWidth(0.7f)
+                        .height(4.dp),
+                    color = if (checkTimeLeft <= 10) ThreatCrimson else LaserGreen,
+                    trackColor = SubtleBorder
+                )
+
                 Spacer(modifier = Modifier.height(50.dp))
 
                 Button(
@@ -283,12 +341,10 @@ class AlarmTriggerActivity : ComponentActivity() {
 
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
-        // Activity Watchdog State
         var activityWatchdogKey by remember { mutableIntStateOf(0) }
         var timeLeft by remember { mutableIntStateOf(alarm.timeoutSeconds) }
         var isAlarmCurrentlyBlasting by remember { mutableStateOf(false) }
 
-        // Inactivity Watchdog Timer
         LaunchedEffect(currentRound, problem, activityWatchdogKey) {
             timeLeft = alarm.timeoutSeconds
             while (timeLeft > 0) {
@@ -296,7 +352,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                 timeLeft--
             }
 
-            // 30s इनएक्टिविटी पर अलार्म शुरू
+            // 30s inactivity -> Alarm shuru
             isAlarmCurrentlyBlasting = true
             vibrateError(vibrator)
             val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
@@ -309,9 +365,7 @@ class AlarmTriggerActivity : ComponentActivity() {
             isAnswerCorrect = false
         }
 
-        // Heartbeat Watchdog Trigger: कीपैड का कोई भी बटन (नंबर या बैकस्पेस) दबाने पर
         fun onUserActivityInput(digit: String? = null, isBackspace: Boolean = false) {
-            // 1. यदि इनएक्टिविटी की वजह से अलार्म बज रहा था -> तुरंत म्यूट करें!
             if (isAlarmCurrentlyBlasting) {
                 val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
                     action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
@@ -322,7 +376,6 @@ class AlarmTriggerActivity : ComponentActivity() {
 
             feedbackMessage = null
 
-            // 2. इनपुट हैंडल करें
             if (isBackspace) {
                 if (userInput.isNotEmpty()) {
                     userInput = userInput.dropLast(1)
@@ -333,7 +386,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                 }
             }
 
-            // 3. टाइमर को तुरंत पूरे 30s पर रीसेट करें!
             activityWatchdogKey++
         }
 
@@ -348,7 +400,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                     .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // टॉप बार: राउंड्स और वॉचडॉग टाइमर
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -380,7 +431,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                     trackColor = SubtleBorder
                 )
 
-                // एक्टिविटी वॉचडॉग स्टेटस
                 Text(
                     text = if (isAlarmCurrentlyBlasting) "PRESS ANY KEY TO MUTE" else "TYPE TO MAINTAIN CALM // 30s INACTIVITY LIMIT",
                     fontFamily = FontFamily.Monospace,
@@ -392,7 +442,6 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // फीडबैक बैनर
                 if (feedbackMessage != null) {
                     Text(
                         text = feedbackMessage!!,
@@ -404,7 +453,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                     )
                 }
 
-                // 6-चेन वर्टिकल नंबर्स
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -450,14 +498,9 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // कीपैड: किसी भी बटन (नंबर या बैकस्पेस) पर तुरंत रीसेट और री-म्यूट
                 NumericKeypad(
-                    onDigit = { digit ->
-                        onUserActivityInput(digit = digit)
-                    },
-                    onBackspace = {
-                        onUserActivityInput(isBackspace = true)
-                    },
+                    onDigit = { digit -> onUserActivityInput(digit = digit) },
+                    onBackspace = { onUserActivityInput(isBackspace = true) },
                     onSubmit = {
                         val isCorrect = MathMissionGenerator.validateAnswer(userInput, problem.correctSum)
                         if (isCorrect) {
@@ -483,7 +526,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                                 }
                             }
                         } else {
-                            // गलत उत्तर: अलार्म नहीं बजेगा, बस वाइब्रेशन और एरर, टाइमर रीसेट
                             vibrateError(vibrator)
                             feedbackMessage = "WRONG! TRY AGAIN"
                             isAnswerCorrect = false
@@ -557,9 +599,7 @@ class AlarmTriggerActivity : ComponentActivity() {
     }
 
     @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        // Back press block
-    }
+    override fun onBackPressed() {}
 }
 
 @Composable
