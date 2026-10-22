@@ -76,18 +76,19 @@ class AlarmTriggerActivity : ComponentActivity() {
         }
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        intent?.let { handleIncomingIntent(it) }
+        handleIncomingIntent(intent)
     }
 
-    private fun handleIncomingIntent(intent: Intent) {
-        alarmId = intent.getLongExtra("ALARM_ID", -1L)
-        isWakeUpCheck = intent.getBooleanExtra("IS_WAKEUP_CHECK", false)
-        isPunishment = intent.getBooleanExtra("IS_PUNISHMENT", false)
-        currentCheckNumber = intent.getIntExtra("CURRENT_CHECK", 1)
-        totalChecksNumber = intent.getIntExtra("TOTAL_CHECKS", 1)
+    private fun handleIncomingIntent(incomingIntent: Intent?) {
+        if (incomingIntent == null) return
+        alarmId = incomingIntent.getLongExtra("ALARM_ID", -1L)
+        isWakeUpCheck = incomingIntent.getBooleanExtra("IS_WAKEUP_CHECK", false)
+        isPunishment = incomingIntent.getBooleanExtra("IS_PUNISHMENT", false)
+        currentCheckNumber = incomingIntent.getIntExtra("CURRENT_CHECK", 1)
+        totalChecksNumber = incomingIntent.getIntExtra("TOTAL_CHECKS", 1)
 
         loadAlarmData(alarmId)
     }
@@ -97,7 +98,6 @@ class AlarmTriggerActivity : ComponentActivity() {
             val db = WakelockDatabase.getDatabase(applicationContext)
             var alarm = if (targetId > 0) db.alarmDao().getAlarmById(targetId) else null
             if (alarm == null) {
-                // Fallback: DB me se pehla alarm uthao taaki buffer screen kabhi na ruke
                 alarm = db.alarmDao().getAllAlarms().firstOrNull()
             }
             withContext(Dispatchers.Main) {
@@ -115,7 +115,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                 currentCheck = currentCheckNumber,
                 totalChecks = totalChecksNumber,
                 onTimeout = {
-                    // 30s khatam: turant red alarm screen me convert ho jao
                     isWakeUpCheck = false
                     val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
                         action = AlarmForegroundService.ACTION_START_ALARM
@@ -146,7 +145,6 @@ class AlarmTriggerActivity : ComponentActivity() {
             RingingAlarmScreen(
                 onDismiss = {
                     isDismissedToMission = true
-                    // Pehli baar mute: shanti se solve karne ke liye
                     val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
                         action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
                     }
@@ -225,7 +223,6 @@ class AlarmTriggerActivity : ComponentActivity() {
         val remainingChecks = (totalChecks - currentCheck).coerceAtLeast(0)
         var checkTimeLeft by remember { mutableIntStateOf(30) }
 
-        // 30 Seconds Visible Countdown
         LaunchedEffect(Unit) {
             while (checkTimeLeft > 0) {
                 delay(1000L)
@@ -266,7 +263,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "CHECK $currentCheck OF $totalChecks",
+                    text = "CHECK $currentCheck OF$totalChecks",
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     fontSize = 24.sp,
@@ -282,7 +279,6 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Visual Timer & Progress Bar
                 Text(
                     text = "TIME TO CONFIRM: ${checkTimeLeft}s",
                     fontFamily = FontFamily.Monospace,
@@ -352,7 +348,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                 timeLeft--
             }
 
-            // 30s inactivity -> Alarm shuru
             isAlarmCurrentlyBlasting = true
             vibrateError(vibrator)
             val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
@@ -406,7 +401,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isPunishment) "PUNISHMENT GAUNTLET" else "ROUND $currentRound OF $totalRounds",
+                        text = if (isPunishment) "PUNISHMENT GAUNTLET" else "ROUND $currentRound OF$totalRounds",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
@@ -609,123 +604,4 @@ fun NumericKeypad(
     onSubmit: () -> Unit
 ) {
     val keys = listOf(
-        listOf("1", "2", "3"),
-        listOf("4", "5", "6"),
-        listOf("7", "8", "9"),
-        listOf("⌫", "0", "GO")
-    )
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        keys.forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                row.forEach { key ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(58.dp)
-                            .background(
-                                if (key == "GO") LaserGreen else ElevatedSurface,
-                                RoundedCornerShape(6.dp)
-                            )
-                            .border(1.dp, SubtleBorder, RoundedCornerShape(6.dp))
-                            .clickable {
-                                when (key) {
-                                    "⌫" -> onBackspace()
-                                    "GO" -> onSubmit()
-                                    else -> onDigit(key)
-                                }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = key,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                            color = if (key == "GO") PureBlack else TextPrimary
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun MasterPinVerificationDialog(
-    correctHash: String,
-    onDismiss: () -> Unit,
-    onSuccess: () -> Unit
-) {
-    var enteredPin by remember { mutableStateOf("") }
-    var isError by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = DarkSurface,
-        title = {
-            Text(
-                text = "ENTER MASTER PIN",
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                color = ThreatCrimson
-            )
-        },
-        text = {
-            Column {
-                Text(
-                    text = "Authorization required to override protocol.",
-                    fontSize = 12.sp,
-                    color = TextSecondary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = enteredPin,
-                    onValueChange = { if (it.length <= 8) enteredPin = it },
-                    singleLine = true,
-                    isError = isError,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = LaserGreen,
-                        unfocusedBorderColor = SubtleBorder,
-                        focusedTextColor = TextPrimary
-                    )
-                )
-                if (isError) {
-                    Text(
-                        text = "INVALID PIN // ACCESS DENIED",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = ThreatCrimson,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    if (WakelockSecurity.verifyPin(enteredPin, correctHash)) {
-                        onSuccess()
-                    } else {
-                        isError = true
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = LaserGreen)
-            ) {
-                Text("VERIFY", color = PureBlack, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("CANCEL", color = TextSecondary)
-            }
-        }
-    )
-}
+        listOf("1",
