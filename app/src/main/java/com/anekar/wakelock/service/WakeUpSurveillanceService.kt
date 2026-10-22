@@ -60,13 +60,20 @@ class WakeUpSurveillanceService : Service() {
             ACTION_START_SURVEILLANCE -> {
                 alarmId = intent?.getLongExtra(EXTRA_ALARM_ID, -1L) ?: -1L
                 currentCheckIndex = 1
+
+                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putBoolean("is_surveillance_active", true)
+                    .putLong("active_alarm_id", alarmId)
+                    .apply()
+
                 startSurveillanceForeground()
                 loadAlarmAndBeginSurveillance()
             }
             ACTION_CONFIRM_AWAKE -> {
                 isAwaitingResponse = false
                 handler.removeCallbacks(penaltyEscalationRunnable)
-                
+
                 currentCheckIndex++
                 if (currentCheckIndex <= totalChecksCount) {
                     scheduleNextCheck()
@@ -160,7 +167,6 @@ class WakeUpSurveillanceService : Service() {
             isAwaitingResponse = false
             handler.removeCallbacks(checkTriggerRunnable)
 
-            // Surveillance roko taaki alarm service ke saath dohra notification na bane
             stopForeground(STOP_FOREGROUND_REMOVE)
 
             val alarmServiceIntent = Intent(this, AlarmForegroundService::class.java).apply {
@@ -173,6 +179,9 @@ class WakeUpSurveillanceService : Service() {
 
     private fun terminateSurveillance() {
         handler.removeCallbacksAndMessages(null)
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("is_surveillance_active", false).apply()
+
         CoroutineScope(Dispatchers.IO).launch {
             val db = WakelockDatabase.getDatabase(applicationContext)
             db.alarmDao().updateSurveillanceState(alarmId, false, 0L, 0L, 0L)
