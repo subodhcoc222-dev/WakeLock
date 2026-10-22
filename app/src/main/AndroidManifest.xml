@@ -2,19 +2,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Core Wake & Timing Permissions -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-
-    <!-- UI Overlay & Notification Permissions -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
-
-    <!-- Audio & System Protection Permissions -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -31,7 +26,6 @@
         android:theme="@style/Theme.WAKELOCK"
         tools:targetApi="35">
 
-        <!-- Main Dashboard & Protocol Configurator -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
@@ -44,7 +38,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Full-Screen Alarm & Math Engine Activity (Locked-Screen Bypass) -->
         <activity
             android:name=".ui.AlarmTriggerActivity"
             android:exported="false"
@@ -56,13 +49,11 @@
             android:turnScreenOn="true"
             tools:ignore="LockedOrientationActivity" />
 
-        <!-- Foreground Audio & Wake-Lock Service -->
         <service
             android:name=".service.AlarmForegroundService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
-        <!-- Wake-Up Check Surveillance Daemon -->
         <service
             android:name=".service.WakeUpSurveillanceService"
             android:exported="false"
@@ -72,7 +63,6 @@
                 android:value="Recurring active awake surveillance cycles" />
         </service>
 
-        <!-- Punishment Gauntlet Service (6-Hour Penalty Loop) -->
         <service
             android:name=".service.PunishmentGauntletService"
             android:exported="false"
@@ -82,12 +72,23 @@
                 android:value="Anti-tamper penalty loop and alarm enforcement" />
         </service>
 
-        <!-- Alarm Trigger Receiver -->
+        <!-- Accessibility Anti-Force Stop Daemon -->
+        <service
+            android:name=".service.AntiForceStopService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <receiver
             android:name=".receiver.AlarmReceiver"
             android:exported="false" />
 
-        <!-- Boot Detection & Anti-Tamper Auto-Launch Receiver -->
         <receiver
             android:name=".receiver.BootReceiver"
             android:enabled="true"
@@ -100,7 +101,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- Anti-Uninstall Device Administrator -->
         <receiver
             android:name=".receiver.WakelockAdminReceiver"
             android:description="@string/device_admin_description"
