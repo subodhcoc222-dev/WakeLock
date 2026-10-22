@@ -121,7 +121,8 @@ fun MainDashboardScreen() {
     val db = remember { WakelockDatabase.getDatabase(context) }
     var alarms by remember { mutableStateOf<List<AlarmEntity>>(emptyList()) }
     var permissionState by remember { mutableStateOf(checkPermissions(context)) }
-    var showAddDialog by remember { mutableStateOf(false) }
+    var showConfigDialog by remember { mutableStateOf(false) }
+    var editingAlarm by remember { mutableStateOf<AlarmEntity?>(null) }
     var selectedAlarmForPin by remember { mutableStateOf<AlarmEntity?>(null) }
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
@@ -135,7 +136,6 @@ fun MainDashboardScreen() {
         }
     }
 
-    // Settings se return aate hi instant real-time re-scan
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -152,7 +152,10 @@ fun MainDashboardScreen() {
         containerColor = PureBlack,
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { showAddDialog = true },
+                onClick = {
+                    editingAlarm = null
+                    showConfigDialog = true
+                },
                 containerColor = LaserGreen,
                 contentColor = PureBlack,
                 shape = CircleShape
@@ -161,105 +164,123 @@ fun MainDashboardScreen() {
             }
         }
     ) { padding ->
-        Column(
+        // Single Full Vertical Scroll Container for Header, Permissions & Alarms
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "WAKELOCK",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
-                        letterSpacing = 2.sp,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "TAMPER-PROOF DISCIPLINE",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = TextMuted
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .background(DarkSurface, RoundedCornerShape(4.dp))
-                        .border(1.dp, if (permissionState.isAllGranted) LaserGreen else ThreatCrimson, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = if (permissionState.isAllGranted) "ARMED" else "UNPROTECTED",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 10.sp,
-                        color = if (permissionState.isAllGranted) LaserGreen else ThreatCrimson
-                    )
+                    Column {
+                        Text(
+                            text = "WAKELOCK",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp,
+                            letterSpacing = 2.sp,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "TAMPER-PROOF DISCIPLINE",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = TextMuted
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .background(DarkSurface, RoundedCornerShape(4.dp))
+                            .border(1.dp, if (permissionState.isAllGranted) LaserGreen else ThreatCrimson, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = if (permissionState.isAllGranted) "ARMED" else "UNPROTECTED",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
+                            color = if (permissionState.isAllGranted) LaserGreen else ThreatCrimson
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            item {
+                PermissionAuditCards(state = permissionState, onRefresh = { refreshAlarms() })
+            }
 
-            PermissionAuditCards(state = permissionState, onRefresh = { refreshAlarms() })
-
-            Spacer(modifier = Modifier.height(10.dp))
+            item {
+                Text(
+                    text = "CONFIGURED PROTOCOLS",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextMuted,
+                    letterSpacing = 1.2.sp
+                )
+            }
 
             if (alarms.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "NO ACTIVE TARGETS CONFIGURED\nTAP + TO INITIALIZE PROTOCOL",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        color = TextMuted,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(alarms, key = { it.id }) { alarm ->
-                        AlarmProtocolCard(
-                            alarm = alarm,
-                            onToggle = {
-                                selectedAlarmForPin = alarm
-                                pendingAction = {
-                                    val updatedState = !alarm.isEnabled
-                                    CoroutineScope(Dispatchers.IO).launch {
-                                        db.alarmDao().updateAlarmState(alarm.id, updatedState)
-                                        if (updatedState) {
-                                            AlarmScheduler.scheduleAlarm(context, alarm.copy(isEnabled = true))
-                                        } else {
-                                            AlarmScheduler.cancelAlarm(context, alarm.id)
-                                        }
-                                        refreshAlarms()
-                                    }
-                                }
-                            },
-                            onDelete = {
-                                selectedAlarmForPin = alarm
-                                pendingAction = {
-                                    CoroutineScope(Dispatchers.IO).launch {
-                                        AlarmScheduler.cancelAlarm(context, alarm.id)
-                                        db.alarmDao().deleteAlarm(alarm)
-                                        refreshAlarms()
-                                    }
-                                }
-                            }
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "NO ACTIVE TARGETS CONFIGURED\nTAP + TO INITIALIZE PROTOCOL",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = TextMuted,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                     }
+                }
+            } else {
+                items(alarms, key = { it.id }) { alarm ->
+                    AlarmProtocolCard(
+                        alarm = alarm,
+                        onCardClick = {
+                            // Alarm edit karne ke liye Master PIN mangna
+                            selectedAlarmForPin = alarm
+                            pendingAction = {
+                                editingAlarm = alarm
+                                showConfigDialog = true
+                            }
+                        },
+                        onToggle = {
+                            selectedAlarmForPin = alarm
+                            pendingAction = {
+                                val updatedState = !alarm.isEnabled
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    db.alarmDao().updateAlarmState(alarm.id, updatedState)
+                                    if (updatedState) {
+                                        AlarmScheduler.scheduleAlarm(context, alarm.copy(isEnabled = true))
+                                    } else {
+                                        AlarmScheduler.cancelAlarm(context, alarm.id)
+                                    }
+                                    refreshAlarms()
+                                }
+                            }
+                        },
+                        onDelete = {
+                            selectedAlarmForPin = alarm
+                            pendingAction = {
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    AlarmScheduler.cancelAlarm(context, alarm.id)
+                                    db.alarmDao().deleteAlarm(alarm)
+                                    refreshAlarms()
+                                }
+                            }
+                        }
+                    )
                 }
             }
         }
@@ -279,17 +300,28 @@ fun MainDashboardScreen() {
             )
         }
 
-        if (showAddDialog) {
-            AddProtocolDialog(
-                onDismiss = { showAddDialog = false },
-                onSave = { newAlarm ->
+        if (showConfigDialog) {
+            AddOrEditProtocolDialog(
+                alarmToEdit = editingAlarm,
+                onDismiss = {
+                    showConfigDialog = false
+                    editingAlarm = null
+                },
+                onSave = { updatedAlarm ->
                     CoroutineScope(Dispatchers.IO).launch {
-                        val id = db.alarmDao().insertAlarm(newAlarm)
-                        val inserted = newAlarm.copy(id = id)
-                        AlarmScheduler.scheduleAlarm(context, inserted)
+                        if (editingAlarm != null) {
+                            db.alarmDao().updateAlarm(updatedAlarm)
+                            AlarmScheduler.cancelAlarm(context, updatedAlarm.id)
+                            AlarmScheduler.scheduleAlarm(context, updatedAlarm)
+                        } else {
+                            val id = db.alarmDao().insertAlarm(updatedAlarm)
+                            val inserted = updatedAlarm.copy(id = id)
+                            AlarmScheduler.scheduleAlarm(context, inserted)
+                        }
                         refreshAlarms()
                         withContext(Dispatchers.Main) {
-                            showAddDialog = false
+                            showConfigDialog = false
+                            editingAlarm = null
                         }
                     }
                 }
@@ -301,6 +333,7 @@ fun MainDashboardScreen() {
 @Composable
 fun AlarmProtocolCard(
     alarm: AlarmEntity,
+    onCardClick: () -> Unit,
     onToggle: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -315,7 +348,8 @@ fun AlarmProtocolCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, SubtleBorder, RoundedCornerShape(8.dp)),
+            .border(1.dp, SubtleBorder, RoundedCornerShape(8.dp))
+            .clickable { onCardClick() },
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
         shape = RoundedCornerShape(8.dp)
     ) {
@@ -390,18 +424,23 @@ fun AlarmProtocolCard(
 }
 
 @Composable
-fun AddProtocolDialog(
+fun AddOrEditProtocolDialog(
+    alarmToEdit: AlarmEntity?,
     onDismiss: () -> Unit,
     onSave: (AlarmEntity) -> Unit
 ) {
     val context = LocalContext.current
-    var hour24 by remember { mutableIntStateOf(5) }
-    var minute by remember { mutableIntStateOf(0) }
-    val selectedDays = remember { mutableStateListOf(1, 2, 3, 4, 5, 6, 7) }
-    var difficulty by remember { mutableStateOf(MissionDifficulty.SEVEN_DIGIT) }
-    var rounds by remember { mutableIntStateOf(2) }
-    var wakeIntervalSec by remember { mutableIntStateOf(600) }
-    var wakeDurationSec by remember { mutableIntStateOf(7200) }
+    var hour24 by remember { mutableIntStateOf(alarmToEdit?.hour ?: 5) }
+    var minute by remember { mutableIntStateOf(alarmToEdit?.minute ?: 0) }
+    val selectedDays = remember {
+        mutableStateListOf<Int>().apply {
+            addAll(alarmToEdit?.daysOfWeek ?: listOf(1, 2, 3, 4, 5, 6, 7))
+        }
+    }
+    var difficulty by remember { mutableStateOf(alarmToEdit?.missionDifficulty ?: MissionDifficulty.SEVEN_DIGIT) }
+    var rounds by remember { mutableIntStateOf(alarmToEdit?.roundsCount ?: 2) }
+    var wakeIntervalSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpIntervalSeconds ?: 600) }
+    var wakeDurationSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpTotalDurationSeconds ?: 7200) }
     var masterPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
@@ -418,7 +457,7 @@ fun AddProtocolDialog(
         containerColor = DarkSurface,
         title = {
             Text(
-                text = "CONFIGURE PROTOCOL",
+                text = if (alarmToEdit != null) "EDIT PROTOCOL" else "CONFIGURE PROTOCOL",
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp,
@@ -430,6 +469,7 @@ fun AddProtocolDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // 1. Time Selector
                 item {
                     Text("TARGET TIME (TAP TO CHANGE)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -482,6 +522,7 @@ fun AddProtocolDialog(
                     }
                 }
 
+                // 2. Day Selector
                 item {
                     Text("REPEAT PROTOCOL DAYS", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -518,45 +559,53 @@ fun AddProtocolDialog(
                     }
                 }
 
+                // 3. Math Rounds UI Fix (Centered & Clear Buttons)
                 item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("MATH ROUNDS", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
-                            Text("Number of problems to solve", fontSize = 11.sp, color = TextSecondary)
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text("MATH ROUNDS (PROBLEMS TO SOLVE)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Button(
                                 onClick = { if (rounds > 1) rounds-- },
                                 colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
-                                shape = RoundedCornerShape(4.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .border(1.dp, SubtleBorder, RoundedCornerShape(6.dp)),
+                                contentPadding = PaddingValues(0.dp)
                             ) {
-                                Text("-", fontSize = 18.sp, color = TextPrimary)
+                                Text("-", fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
                             }
+
                             Text(
                                 text = String.format("%02d", rounds),
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 18.sp,
+                                fontSize = 24.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = LaserGreen,
-                                modifier = Modifier.padding(horizontal = 12.dp)
+                                modifier = Modifier.padding(horizontal = 28.dp)
                             )
+
                             Button(
                                 onClick = { if (rounds < 50) rounds++ },
                                 colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
-                                shape = RoundedCornerShape(4.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .border(1.dp, SubtleBorder, RoundedCornerShape(6.dp)),
+                                contentPadding = PaddingValues(0.dp)
                             ) {
-                                Text("+", fontSize = 18.sp, color = TextPrimary)
+                                Text("+", fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
 
+                // 4. Mission Difficulty
                 item {
                     Text("MISSION DIFFICULTY (6-CHAIN)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -578,6 +627,7 @@ fun AddProtocolDialog(
                     }
                 }
 
+                // 5. Wake-Up Check Interval
                 item {
                     Text("WAKE-UP CHECK INTERVAL", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -610,6 +660,7 @@ fun AddProtocolDialog(
                     }
                 }
 
+                // 6. Surveillance Duration
                 item {
                     Text("SURVEILLANCE DURATION", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -643,8 +694,14 @@ fun AddProtocolDialog(
                     }
                 }
 
+                // 7. Master PIN Setup
                 item {
-                    Text("SET MASTER PIN (4-8 DIGITS)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
+                    Text(
+                        if (alarmToEdit != null) "UPDATE MASTER PIN (OR LEAVE BLANK TO KEEP)" else "SET MASTER PIN (4-8 DIGITS)",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TextMuted
+                    )
                     Spacer(modifier = Modifier.height(4.dp))
                     OutlinedTextField(
                         value = masterPin,
@@ -683,28 +740,40 @@ fun AddProtocolDialog(
                 onClick = {
                     if (selectedDays.isEmpty()) {
                         errorMessage = "Please select at least 1 repeat day"
-                    } else if (masterPin.length < 4) {
+                    } else if (alarmToEdit == null && masterPin.length < 4) {
                         errorMessage = "PIN must be at least 4 digits"
-                    } else if (masterPin != confirmPin) {
+                    } else if (masterPin.isNotEmpty() && masterPin != confirmPin) {
                         errorMessage = "PIN confirmation does not match"
                     } else {
-                        val newAlarm = AlarmEntity(
+                        val pinHash = if (masterPin.isNotEmpty()) {
+                            WakelockSecurity.hashPin(masterPin)
+                        } else {
+                            alarmToEdit?.masterPinHash ?: ""
+                        }
+
+                        val updatedAlarm = AlarmEntity(
+                            id = alarmToEdit?.id ?: 0L,
                             hour = hour24,
                             minute = minute,
                             daysOfWeek = selectedDays.toList(),
+                            isEnabled = alarmToEdit?.isEnabled ?: true,
                             missionDifficulty = difficulty,
                             roundsCount = rounds,
                             timeoutSeconds = difficulty.defaultTimeoutSec,
                             wakeUpIntervalSeconds = wakeIntervalSec,
                             wakeUpTotalDurationSeconds = wakeDurationSec,
-                            masterPinHash = WakelockSecurity.hashPin(masterPin)
+                            masterPinHash = pinHash
                         )
-                        onSave(newAlarm)
+                        onSave(updatedAlarm)
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = LaserGreen)
             ) {
-                Text("ARM PROTOCOL", color = PureBlack, fontWeight = FontWeight.Bold)
+                Text(
+                    if (alarmToEdit != null) "UPDATE PROTOCOL" else "ARM PROTOCOL",
+                    color = PureBlack,
+                    fontWeight = FontWeight.Bold
+                )
             }
         },
         dismissButton = {
