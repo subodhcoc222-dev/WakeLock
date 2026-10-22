@@ -1,7 +1,5 @@
 package com.anekar.wakelock.service
 
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -46,13 +44,12 @@ class WakeUpSurveillanceService : Service() {
         super.onCreate()
         audioHijackManager = AudioHijackManager(this)
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        // पूरे सर्विलांस के दौरान CPU स्लीप को ब्लॉक रखने के लिए लगातार WakeLock
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "WAKELOCK::SurveillancePersistentWakeLock"
         ).apply {
             setReferenceCounted(false)
-            acquire(6 * 60 * 60 * 1000L) // 6 घंटे तक सुरक्षित लॉक
+            acquire(6 * 60 * 60 * 1000L)
         }
     }
 
@@ -70,12 +67,10 @@ class WakeUpSurveillanceService : Service() {
                 isAwaitingResponse = false
                 handler.removeCallbacks(penaltyEscalationRunnable)
                 
-                // अगला चेक शेड्यूल करना
                 currentCheckIndex++
                 if (currentCheckIndex <= totalChecksCount) {
                     scheduleNextCheck()
                 } else {
-                    // सभी चेक पूरे हो गए -> सेशन सफलतापूर्वक समाप्त
                     terminateSurveillance()
                 }
             }
@@ -114,7 +109,6 @@ class WakeUpSurveillanceService : Service() {
 
             intervalSeconds = alarm.wakeUpIntervalSeconds
             totalDurationSeconds = alarm.wakeUpTotalDurationSeconds
-            // सटीक अनुपात: जितने चेक बनते हैं, ठीक उतने ही चलेंगे
             totalChecksCount = (totalDurationSeconds / intervalSeconds).coerceAtLeast(1)
 
             val startTime = System.currentTimeMillis()
@@ -158,12 +152,17 @@ class WakeUpSurveillanceService : Service() {
         }
         startActivity(checkIntent)
 
-        // 30 सेकंड में रिस्पॉन्स न मिलने पर अलार्म सायरन ब्लास्ट
         handler.postDelayed(penaltyEscalationRunnable, 30 * 1000L)
     }
 
     private val penaltyEscalationRunnable = Runnable {
         if (isAwaitingResponse) {
+            isAwaitingResponse = false
+            handler.removeCallbacks(checkTriggerRunnable)
+
+            // Surveillance roko taaki alarm service ke saath dohra notification na bane
+            stopForeground(STOP_FOREGROUND_REMOVE)
+
             val alarmServiceIntent = Intent(this, AlarmForegroundService::class.java).apply {
                 action = AlarmForegroundService.ACTION_START_ALARM
                 putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarmId)
