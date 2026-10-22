@@ -24,10 +24,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.anekar.wakelock.data.database.WakelockDatabase
 import com.anekar.wakelock.data.model.AlarmEntity
 import com.anekar.wakelock.data.model.MissionDifficulty
@@ -114,6 +117,7 @@ fun SplashScreen() {
 @Composable
 fun MainDashboardScreen() {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val db = remember { WakelockDatabase.getDatabase(context) }
     var alarms by remember { mutableStateOf<List<AlarmEntity>>(emptyList()) }
     var permissionState by remember { mutableStateOf(checkPermissions(context)) }
@@ -131,8 +135,17 @@ fun MainDashboardScreen() {
         }
     }
 
-    LaunchedEffect(Unit) {
-        refreshAlarms()
+    // Settings se return aate hi instant real-time re-scan
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshAlarms()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     Scaffold(
@@ -417,7 +430,6 @@ fun AddProtocolDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // 1. Time Selector (Click to open Native TimePicker)
                 item {
                     Text("TARGET TIME (TAP TO CHANGE)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -470,7 +482,6 @@ fun AddProtocolDialog(
                     }
                 }
 
-                // 2. Day Selector (Mon to Sun)
                 item {
                     Text("REPEAT PROTOCOL DAYS", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -507,7 +518,6 @@ fun AddProtocolDialog(
                     }
                 }
 
-                // 3. Rounds Stepper (1 to 50)
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -547,7 +557,6 @@ fun AddProtocolDialog(
                     }
                 }
 
-                // 4. Mission Difficulty
                 item {
                     Text("MISSION DIFFICULTY (6-CHAIN)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -569,7 +578,6 @@ fun AddProtocolDialog(
                     }
                 }
 
-                // 5. Wake-Up Check Interval (Horizontal Scrollable - Won't squish)
                 item {
                     Text("WAKE-UP CHECK INTERVAL", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -602,7 +610,6 @@ fun AddProtocolDialog(
                     }
                 }
 
-                // 6. Surveillance Duration (Horizontal Scrollable - Won't squish)
                 item {
                     Text("SURVEILLANCE DURATION", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -636,7 +643,6 @@ fun AddProtocolDialog(
                     }
                 }
 
-                // 7. Master PIN Setup
                 item {
                     Text("SET MASTER PIN (4-8 DIGITS)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
