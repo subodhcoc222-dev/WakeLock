@@ -1,10 +1,12 @@
 package com.anekar.wakelock.ui.components
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -17,15 +19,15 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.anekar.wakelock.receiver.WakelockAdminReceiver
 import com.anekar.wakelock.ui.theme.*
 
@@ -33,13 +35,18 @@ data class PermissionState(
     val hasOverlay: Boolean,
     val hasExactAlarm: Boolean,
     val hasBatteryOpt: Boolean,
-    val hasDeviceAdmin: Boolean
+    val hasDeviceAdmin: Boolean,
+    val hasNotification: Boolean,
+    val isAutoStartAcknowledged: Boolean
 ) {
     val isAllGranted: Boolean
-        get() = hasOverlay && hasExactAlarm && hasBatteryOpt && hasDeviceAdmin
+        get() = hasOverlay && hasExactAlarm && hasBatteryOpt && hasDeviceAdmin && hasNotification && isAutoStartAcknowledged
 }
 
 fun checkPermissions(context: Context): PermissionState {
+    val prefs = context.getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+    val isAutoStartAck = prefs.getBoolean("autostart_ack", false)
+
     val hasOverlay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
         Settings.canDrawOverlays(context)
     } else true
@@ -58,7 +65,21 @@ fun checkPermissions(context: Context): PermissionState {
     val adminComponent = ComponentName(context, WakelockAdminReceiver::class.java)
     val hasDeviceAdmin = dpm.isAdminActive(adminComponent)
 
-    return PermissionState(hasOverlay, hasExactAlarm, hasBatteryOpt, hasDeviceAdmin)
+    val hasNotification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+    } else true
+
+    return PermissionState(
+        hasOverlay,
+        hasExactAlarm,
+        hasBatteryOpt,
+        hasDeviceAdmin,
+        hasNotification,
+        isAutoStartAck
+    )
 }
 
 @Composable
@@ -68,7 +89,7 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 12.dp),
+            .padding(vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
@@ -80,11 +101,11 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
             letterSpacing = 1.2.sp
         )
 
-        // Card 1: Display Over Other Apps
+        // 1. Overlay Card
         AnimatedVisibility(visible = !state.hasOverlay, exit = fadeOut() + shrinkVertically()) {
             AuditCard(
                 title = "OVERLAY PERMISSION",
-                description = "Required to display Math Mission over lockscreen and running apps.",
+                description = "Math Mission ko lockscreen ke upar forcefully show karne ke liye required hai.",
                 actionText = "GRANT OVERLAY"
             ) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -97,26 +118,12 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
             }
         }
 
-        // Card 2: Schedule Exact Alarm
-        AnimatedVisibility(visible = !state.hasExactAlarm, exit = fadeOut() + shrinkVertically()) {
-            AuditCard(
-                title = "EXACT ALARM ACCESS",
-                description = "Required to fire 30s testing and morning targets with millisecond precision.",
-                actionText = "GRANT EXACT ALARM"
-            ) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-                    context.startActivity(intent)
-                }
-            }
-        }
-
-        // Card 3: Battery Optimization Whitelist
+        // 2. Battery Whitelist Card
         AnimatedVisibility(visible = !state.hasBatteryOpt, exit = fadeOut() + shrinkVertically()) {
             AuditCard(
-                title = "BATTERY WHITELIST",
-                description = "Prevents OS background daemon killers from terminating wake-up checks.",
-                actionText = "DISABLE RESTRICTIONS"
+                title = "BATTERY RESTRICTION REMOVAL",
+                description = "Background wake-up check timers ko OS sleep mode me na daal sake.",
+                actionText = "SET TO UNRESTRICTED"
             ) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -127,11 +134,11 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
             }
         }
 
-        // Card 4: Device Administrator
+        // 3. Device Admin Card
         AnimatedVisibility(visible = !state.hasDeviceAdmin, exit = fadeOut() + shrinkVertically()) {
             AuditCard(
                 title = "ANTI-UNINSTALL GUARD",
-                description = "Enforces tamper resistance and prevents uninstallation during surveillance.",
+                description = "Surveillance ke dauran app uninstall hone se rokta hai.",
                 actionText = "ACTIVATE ADMIN"
             ) {
                 val adminComponent = ComponentName(context, WakelockAdminReceiver::class.java)
@@ -139,14 +146,47 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
                     putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
                     putExtra(
                         DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                        "WAKELOCK tamper protection prevents uninstallation during active monitoring."
+                        "WAKELOCK tamper protection restricts uninstallation during active monitoring."
                     )
                 }
                 context.startActivity(intent)
             }
         }
 
-        // Final Clearance State Badge
+        // 4. Notifications Card (Android 13+)
+        AnimatedVisibility(visible = !state.hasNotification, exit = fadeOut() + shrinkVertically()) {
+            AuditCard(
+                title = "NOTIFICATION PERMISSION",
+                description = "Alarm head-up display aur sirens ke liye notification on karna zaroori hai.",
+                actionText = "ALLOW NOTIFICATIONS"
+            ) {
+                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                }
+                context.startActivity(intent)
+            }
+        }
+
+        // 5. OEM Auto-Start & Background Activity Card
+        AnimatedVisibility(visible = !state.isAutoStartAcknowledged, exit = fadeOut() + shrinkVertically()) {
+            AuditCard(
+                title = "AUTO-LAUNCH / AUTO-START [CRITICAL]",
+                description = "Reboot trap ke liye zaroori: App Info > 'Auto-launch' ya 'Allow background activity' ko ON karein.",
+                actionText = "OPEN APP SETTINGS & VERIFY"
+            ) {
+                val prefs = context.getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("autostart_ack", true).apply()
+
+                // Direct jump to App Details settings
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                }
+                context.startActivity(intent)
+                onRefresh()
+            }
+        }
+
+        // All Clear Banner
         AnimatedVisibility(visible = state.isAllGranted) {
             Box(
                 modifier = Modifier
@@ -159,7 +199,7 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
                     Text(
                         text = "✓ ALL PERMISSIONS GRANTED // SYSTEM FULLY ARMED",
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = LaserGreen
                     )
