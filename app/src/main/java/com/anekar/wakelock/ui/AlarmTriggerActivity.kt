@@ -263,7 +263,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "CHECK $currentCheck OF$totalChecks",
+                    text = "CHECK $currentCheck OF $totalChecks",
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     fontSize = 24.sp,
@@ -401,7 +401,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isPunishment) "PUNISHMENT GAUNTLET" else "ROUND $currentRound OF$totalRounds",
+                        text = if (isPunishment) "PUNISHMENT GAUNTLET" else "ROUND $currentRound OF $totalRounds",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
@@ -604,4 +604,123 @@ fun NumericKeypad(
     onSubmit: () -> Unit
 ) {
     val keys = listOf(
-        listOf("1",
+        listOf("1", "2", "3"),
+        listOf("4", "5", "6"),
+        listOf("7", "8", "9"),
+        listOf("⌫", "0", "GO")
+    )
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        keys.forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                row.forEach { key ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(58.dp)
+                            .background(
+                                if (key == "GO") LaserGreen else ElevatedSurface,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .border(1.dp, SubtleBorder, RoundedCornerShape(6.dp))
+                            .clickable {
+                                when (key) {
+                                    "⌫" -> onBackspace()
+                                    "GO" -> onSubmit()
+                                    else -> onDigit(key)
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = key,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp,
+                            color = if (key == "GO") PureBlack else TextPrimary
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MasterPinVerificationDialog(
+    correctHash: String,
+    onDismiss: () -> Unit,
+    onSuccess: () -> Unit
+) {
+    var enteredPin by remember { mutableStateOf("") }
+    var isError by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DarkSurface,
+        title = {
+            Text(
+                text = "ENTER MASTER PIN",
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = ThreatCrimson
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "Authorization required to override protocol.",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = enteredPin,
+                    onValueChange = { if (it.length <= 8) enteredPin = it },
+                    singleLine = true,
+                    isError = isError,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = LaserGreen,
+                        unfocusedBorderColor = SubtleBorder,
+                        focusedTextColor = TextPrimary
+                    )
+                )
+                if (isError) {
+                    Text(
+                        text = "INVALID PIN // ACCESS DENIED",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = ThreatCrimson,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (WakelockSecurity.verifyPin(enteredPin, correctHash)) {
+                        onSuccess()
+                    } else {
+                        isError = true
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = LaserGreen)
+            ) {
+                Text("VERIFY", color = PureBlack, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("CANCEL", color = TextSecondary)
+            }
+        }
+    )
+}
