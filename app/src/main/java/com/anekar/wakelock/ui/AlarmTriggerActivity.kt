@@ -32,7 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.anekar.wakelock.data.database.WakelockDatabase
 import com.anekar.wakelock.data.model.AlarmEntity
 import com.anekar.wakelock.data.model.MissionDifficulty
-import com.anekar.wakelock.data.security.SecurityManager
+import com.anekar.wakelock.data.WakelockSecurity
 import com.anekar.wakelock.domain.math.MathMissionGenerator
 import com.anekar.wakelock.domain.math.MathProblem
 import com.anekar.wakelock.service.AlarmForegroundService
@@ -54,7 +54,6 @@ class AlarmTriggerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Lockscreen Takeover & Screen Wake
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -188,7 +187,6 @@ class AlarmTriggerActivity : ComponentActivity() {
 
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
-        // Countdown Timer Logic
         DisposableEffect(currentRound) {
             val timer = object : CountDownTimer((alarm.timeoutSeconds * 1000).toLong(), 1000) {
                 override fun onTick(millisUntilFinished: Long) {
@@ -196,7 +194,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                 }
 
                 override fun onFinish() {
-                    // Timeout -> Reset problem & penalty
                     vibrateError(vibrator)
                     problem = MathMissionGenerator.generateProblem(difficulty)
                     userInput = ""
@@ -219,7 +216,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                     .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Header & Timer Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -253,7 +249,6 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Vertical Monospace Numbers Chain
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -277,7 +272,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                                 textAlign = TextAlign.End
                             )
                         }
-                        Divider(
+                        HorizontalDivider(
                             modifier = Modifier.padding(vertical = 8.dp),
                             color = SubtleBorder,
                             thickness = 1.dp
@@ -295,7 +290,6 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Custom Dark Numeric Keypad
                 NumericKeypad(
                     onDigit = { digit ->
                         if (userInput.length < 15) userInput += digit
@@ -323,7 +317,6 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Emergency Master PIN Escape
                 Text(
                     text = "[ EMERGENCY MASTER PIN ]",
                     fontFamily = FontFamily.Monospace,
@@ -361,13 +354,11 @@ class AlarmTriggerActivity : ComponentActivity() {
             startService(serviceIntent)
             finish()
         } else {
-            // Stop Audio
             val stopAlarmIntent = Intent(this, AlarmForegroundService::class.java).apply {
                 action = AlarmForegroundService.ACTION_STOP_ALARM
             }
             startService(stopAlarmIntent)
 
-            // Start Surveillance if configured
             if (alarm.wakeUpTotalDurationSeconds > 0) {
                 val surveillanceIntent = Intent(this, WakeUpSurveillanceService::class.java).apply {
                     action = WakeUpSurveillanceService.ACTION_START_SURVEILLANCE
@@ -387,6 +378,7 @@ class AlarmTriggerActivity : ComponentActivity() {
         }
     }
 
+    @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         // Suppress back button during alarm execution
     }
@@ -501,7 +493,7 @@ fun MasterPinVerificationDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (SecurityManager.verifyPin(enteredPin, correctHash)) {
+                    if (WakelockSecurity.verifyPin(enteredPin, correctHash)) {
                         onSuccess()
                     } else {
                         isError = true
