@@ -71,7 +71,7 @@ object NotificationHelper {
     fun buildAlarmNotification(context: Context, alarmId: Long, label: String): Notification {
         val fullScreenIntent = Intent(context, AlarmTriggerActivity::class.java).apply {
             putExtra("ALARM_ID", alarmId)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
             context,
