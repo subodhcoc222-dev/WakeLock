@@ -25,6 +25,7 @@ class AlarmForegroundService : Service() {
         const val ACTION_START_ALARM = "ACTION_START_ALARM"
         const val ACTION_STOP_ALARM = "ACTION_STOP_ALARM"
         const val ACTION_MUTE_TEMPORARY = "ACTION_MUTE_TEMPORARY"
+        const val ACTION_RESUME_TONE = "ACTION_RESUME_TONE"
         const val EXTRA_ALARM_ID = "EXTRA_ALARM_ID"
     }
 
@@ -83,6 +84,13 @@ class AlarmForegroundService : Service() {
             }
             ACTION_MUTE_TEMPORARY -> {
                 audioHijackManager.stopAlarmTone()
+            }
+            ACTION_RESUME_TONE -> {
+                CoroutineScope(Dispatchers.IO).launch {
+                    val db = WakelockDatabase.getDatabase(applicationContext)
+                    val alarm = db.alarmDao().getAlarmById(alarmId)
+                    audioHijackManager.startAlarmTone(alarm?.ringtoneUri)
+                }
             }
             ACTION_STOP_ALARM -> {
                 audioHijackManager.stopAlarmTone()
