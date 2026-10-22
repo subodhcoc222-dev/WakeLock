@@ -41,6 +41,7 @@ import com.anekar.wakelock.service.WakeUpSurveillanceService
 import com.anekar.wakelock.ui.theme.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -49,6 +50,8 @@ class AlarmTriggerActivity : ComponentActivity() {
     private var alarmId: Long = -1L
     private var isWakeUpCheck: Boolean = false
     private var isPunishment: Boolean = false
+    private var currentCheckNumber: Int = 1
+    private var totalChecksNumber: Int = 1
     private var currentAlarm: AlarmEntity? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,6 +71,16 @@ class AlarmTriggerActivity : ComponentActivity() {
         alarmId = intent.getLongExtra("ALARM_ID", -1L)
         isWakeUpCheck = intent.getBooleanExtra("IS_WAKEUP_CHECK", false)
         isPunishment = intent.getBooleanExtra("IS_PUNISHMENT", false)
+        currentCheckNumber = intent.getIntExtra("CURRENT_CHECK", 1)
+        totalChecksNumber = intent.getIntExtra("TOTAL_CHECKS", 1)
+
+        // Math Mission solve karte waqt siren ko mute karna
+        if (!isWakeUpCheck) {
+            val muteIntent = Intent(this, AlarmForegroundService::class.java).apply {
+                action = AlarmForegroundService.ACTION_STOP_ALARM
+            }
+            startService(muteIntent)
+        }
 
         setContent {
             WakelockTheme {
@@ -93,7 +106,7 @@ class AlarmTriggerActivity : ComponentActivity() {
         val alarm = currentAlarm
 
         if (isWakeUpCheck) {
-            WakeUpCheckScreen()
+            WakeUpCheckScreen(currentCheckNumber, totalChecksNumber)
         } else if (alarm != null) {
             MathGauntletScreen(alarm)
         } else {
@@ -109,7 +122,8 @@ class AlarmTriggerActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun WakeUpCheckScreen() {
+    private fun WakeUpCheckScreen(currentCheck: Int, totalChecks: Int) {
+        val remainingChecks = (totalChecks - currentCheck).coerceAtLeast(0)
         val infiniteTransition = rememberInfiniteTransition(label = "pulse")
         val scale by infiniteTransition.animateFloat(
             initialValue = 0.95f,
@@ -140,14 +154,23 @@ class AlarmTriggerActivity : ComponentActivity() {
                     color = LaserGreen,
                     letterSpacing = 1.5.sp
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+                // Wake-up Check Live Counter
                 Text(
-                    text = "VERIFY FULL CONSCIOUSNESS",
+                    text = "CHECK $currentCheck OF $totalChecks",
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "REMAINING CHECKS: $remainingChecks",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
-                    color = TextSecondary
+                    color = WarningAmber
                 )
-                Spacer(modifier = Modifier.height(60.dp))
+                Spacer(modifier = Modifier.height(50.dp))
 
                 Button(
                     onClick = {
@@ -183,26 +206,44 @@ class AlarmTriggerActivity : ComponentActivity() {
         var problem by remember { mutableStateOf(MathMissionGenerator.generateProblem(difficulty)) }
         var userInput by remember { mutableStateOf("") }
         var timeLeft by remember { mutableIntStateOf(alarm.timeoutSeconds) }
+        var feedbackMessage by remember { mutableStateOf<String?>(null) }
+        var isAnswerCorrect by remember { mutableStateOf(false) }
         var showPinDialog by remember { mutableStateOf(false) }
 
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
-        DisposableEffect(currentRound) {
-            val timer = object : CountDownTimer((alarm.timeoutSeconds * 1000).toLong(), 1000) {
+        // Countdown Timer
+        DisposableEffect(currentRound, problem) {
+            val timer = object : CountDownTimer((timeLeft * 1000).toLong(), 1000) {
                 override fun onTick(millisUntilFinished: Long) {
                     timeLeft = (millisUntilFinished / 1000).toInt()
                 }
 
                 override fun onFinish() {
+                    // Timeout -> Play alarm siren and reset problem
+                    val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                        action = AlarmForegroundService.ACTION_START_ALARM
+                        putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm.id)
+                    }
+                    startService(sirenIntent)
+
                     vibrateError(vibrator)
                     problem = MathMissionGenerator.generateProblem(difficulty)
                     userInput = ""
                     timeLeft = alarm.timeoutSeconds
+                    feedbackMessage = "TIMEOUT // ALARM TRIGGERED"
+                    isAnswerCorrect = false
                     start()
                 }
             }.start()
 
             onDispose { timer.cancel() }
+        }
+
+        // Keypad button dabane par timer reset karne ka function
+        fun resetTimerOnTyping() {
+            timeLeft = alarm.timeoutSeconds
+            feedbackMessage = null
         }
 
         Box(
@@ -247,12 +288,29 @@ class AlarmTriggerActivity : ComponentActivity() {
                     trackColor = SubtleBorder
                 )
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
+                // Feedback Banner
+                if (feedbackMessage != null) {
+                    Text(
+                        text = feedbackMessage!!,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = if (isAnswerCorrect) LaserGreen else ThreatCrimson,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
+
+                // 6-Chain Addition Numbers
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, SubtleBorder, RoundedCornerShape(8.dp)),
+                        .border(
+                            1.dp,
+                            if (feedbackMessage != null && !isAnswerCorrect) ThreatCrimson else SubtleBorder,
+                            RoundedCornerShape(8.dp)
+                        ),
                     colors = CardDefaults.cardColors(containerColor = DarkSurface),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -290,27 +348,43 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.weight(1f))
 
+                // Keypad with auto-timer reset
                 NumericKeypad(
                     onDigit = { digit ->
-                        if (userInput.length < 15) userInput += digit
+                        if (userInput.length < 15) {
+                            userInput += digit
+                            resetTimerOnTyping()
+                        }
                     },
                     onBackspace = {
-                        if (userInput.isNotEmpty()) userInput = userInput.dropLast(1)
+                        if (userInput.isNotEmpty()) {
+                            userInput = userInput.dropLast(1)
+                            resetTimerOnTyping()
+                        }
                     },
                     onSubmit = {
                         val isCorrect = MathMissionGenerator.validateAnswer(userInput, problem.correctSum)
                         if (isCorrect) {
-                            if (currentRound < totalRounds) {
-                                currentRound++
-                                problem = MathMissionGenerator.generateProblem(difficulty)
-                                userInput = ""
-                                timeLeft = alarm.timeoutSeconds
-                            } else {
-                                onGauntletCompleted(alarm)
+                            feedbackMessage = "CORRECT ANSWER ✓"
+                            isAnswerCorrect = true
+                            CoroutineScope(Dispatchers.Main).launch {
+                                delay(400)
+                                if (currentRound < totalRounds) {
+                                    currentRound++
+                                    problem = MathMissionGenerator.generateProblem(difficulty)
+                                    userInput = ""
+                                    timeLeft = alarm.timeoutSeconds
+                                    feedbackMessage = null
+                                } else {
+                                    onGauntletCompleted(alarm)
+                                }
                             }
                         } else {
                             vibrateError(vibrator)
+                            feedbackMessage = "WRONG! TRY AGAIN"
+                            isAnswerCorrect = false
                             userInput = ""
+                            resetTimerOnTyping()
                         }
                     }
                 )
@@ -380,7 +454,7 @@ class AlarmTriggerActivity : ComponentActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // Suppress back button during alarm execution
+        // Suppress back button
     }
 }
 
