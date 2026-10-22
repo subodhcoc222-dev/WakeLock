@@ -65,6 +65,7 @@ class WakeUpSurveillanceService : Service() {
                 prefs.edit()
                     .putBoolean("is_surveillance_active", true)
                     .putLong("active_alarm_id", alarmId)
+                    .putInt("cached_current_check", 1)
                     .apply()
 
                 startSurveillanceForeground()
@@ -75,6 +76,9 @@ class WakeUpSurveillanceService : Service() {
                 handler.removeCallbacks(penaltyEscalationRunnable)
 
                 currentCheckIndex++
+                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putInt("cached_current_check", currentCheckIndex).apply()
+
                 if (currentCheckIndex <= totalChecksCount) {
                     scheduleNextCheck()
                 } else {
@@ -118,6 +122,12 @@ class WakeUpSurveillanceService : Service() {
             totalDurationSeconds = alarm.wakeUpTotalDurationSeconds
             totalChecksCount = (totalDurationSeconds / intervalSeconds).coerceAtLeast(1)
 
+            val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putInt("cached_current_check", currentCheckIndex)
+                .putInt("cached_total_checks", totalChecksCount)
+                .apply()
+
             val startTime = System.currentTimeMillis()
             val endTime = startTime + (totalDurationSeconds * 1000L)
 
@@ -145,6 +155,12 @@ class WakeUpSurveillanceService : Service() {
     private fun triggerCheckAlert() {
         audioHijackManager.playDoubleBeep()
         isAwaitingResponse = true
+
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putInt("cached_current_check", currentCheckIndex)
+            .putInt("cached_total_checks", totalChecksCount)
+            .apply()
 
         val checkIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
             putExtra("ALARM_ID", alarmId)
@@ -180,7 +196,10 @@ class WakeUpSurveillanceService : Service() {
     private fun terminateSurveillance() {
         handler.removeCallbacksAndMessages(null)
         val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putBoolean("is_surveillance_active", false).apply()
+        prefs.edit()
+            .putBoolean("is_surveillance_active", false)
+            .putInt("cached_current_check", 1)
+            .apply()
 
         CoroutineScope(Dispatchers.IO).launch {
             val db = WakelockDatabase.getDatabase(applicationContext)
