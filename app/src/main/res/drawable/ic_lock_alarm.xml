@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Octagonal Security Perimeter -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#F5F5F7"
+        android:strokeWidth="2.5"
+        android:strokeLineJoin="round"
+        android:pathData="M14,4 L34,4 L44,14 L44,34 L34,44 L14,44 L4,34 L4,14 Z" />
+    
+    <!-- Lock Shackle -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#30D158"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M18,20 L18,15 C18,11.69 20.69,9 24,9 C27.31,9 30,11.69 30,15 L30,20" />
+
+    <!-- Center Keyhole Striker -->
+    <path
+        android:fillColor="#FF3B30"
+        android:pathData="M24,24 A3,3 0 1,0 24,30 A3,3 0 1,0 24,24 Z M22.5,29 L21,35 L27,35 L25.5,29 Z" />
+</vector>
