@@ -48,6 +48,12 @@ class AlarmForegroundService : Service() {
 
         when (action) {
             ACTION_START_ALARM -> {
+                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putBoolean("is_alarm_active", true)
+                    .putLong("active_alarm_id", alarmId)
+                    .apply()
+
                 val notification = NotificationHelper.buildAlarmNotification(
                     this,
                     alarmId,
@@ -94,6 +100,8 @@ class AlarmForegroundService : Service() {
             }
             ACTION_STOP_ALARM -> {
                 audioHijackManager.stopAlarmTone()
+                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("is_alarm_active", false).apply()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
