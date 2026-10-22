@@ -27,8 +27,8 @@ class PunishmentGauntletService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var alarmId: Long = -1L
-    private val punishmentDurationMillis = 6 * 60 * 60 * 1000L // 6 Hours
-    private val checkIntervalMillis = 5 * 60 * 1000L // 5 Minutes
+    private val punishmentDurationMillis = 6 * 60 * 60 * 1000L
+    private val checkIntervalMillis = 5 * 60 * 1000L
     private var punishmentEndTime = 0L
 
     companion object {
@@ -59,7 +59,6 @@ class PunishmentGauntletService : Service() {
             }
             ACTION_SOLVED_ROUND -> {
                 audioHijackManager.stopAlarmTone()
-                // Pause for 5 minutes until next round
                 handler.postDelayed(gauntletCycleRunnable, checkIntervalMillis)
             }
             ACTION_TERMINATE_WITH_PIN -> {
@@ -115,9 +114,11 @@ class PunishmentGauntletService : Service() {
         val triggerIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
             putExtra("ALARM_ID", alarmId)
             putExtra("IS_PUNISHMENT", true)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
         }
         startActivity(triggerIntent)
     }
