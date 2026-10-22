@@ -72,9 +72,11 @@ class AlarmForegroundService : Service() {
                 val triggerIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
                     putExtra("ALARM_ID", alarmId)
                     putExtra("IS_PUNISHMENT", false)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    )
                 }
                 startActivity(triggerIntent)
             }
