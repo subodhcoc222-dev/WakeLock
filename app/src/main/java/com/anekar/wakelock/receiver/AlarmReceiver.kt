@@ -3,13 +3,39 @@ package com.anekar.wakelock.receiver
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import com.anekar.wakelock.service.AlarmForegroundService
 
 class AlarmReceiver : BroadcastReceiver() {
+
+    companion object {
+        private var wakeLock: PowerManager.WakeLock? = null
+
+        fun acquireWakeLock(context: Context) {
+            if (wakeLock == null) {
+                val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "WAKELOCK::AlarmReceiverWakeLock"
+                ).apply {
+                    setReferenceCounted(false)
+                }
+            }
+            wakeLock?.acquire(60 * 1000L)
+        }
+
+        fun releaseWakeLock() {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        }
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
+        acquireWakeLock(context)
+
         val alarmId = intent.getLongExtra("ALARM_ID", -1L)
-        if (alarmId == -1L) return
 
         val serviceIntent = Intent(context, AlarmForegroundService::class.java).apply {
             action = AlarmForegroundService.ACTION_START_ALARM
