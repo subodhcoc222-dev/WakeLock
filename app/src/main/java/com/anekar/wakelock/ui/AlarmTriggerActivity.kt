@@ -85,14 +85,28 @@ class AlarmTriggerActivity : ComponentActivity() {
 
     private fun handleIncomingIntent(incomingIntent: Intent?) {
         if (incomingIntent == null) return
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+
         alarmId = incomingIntent.getLongExtra("ALARM_ID", -1L)
         isWakeUpCheck = incomingIntent.getBooleanExtra("IS_WAKEUP_CHECK", false)
         isPunishment = incomingIntent.getBooleanExtra("IS_PUNISHMENT", false)
-        currentCheckNumber = incomingIntent.getIntExtra("CURRENT_CHECK", 1)
-        totalChecksNumber = incomingIntent.getIntExtra("TOTAL_CHECKS", 1)
+
+        // Single Source of Truth: Default 1 par override hone se bachana
+        if (incomingIntent.hasExtra("CURRENT_CHECK")) {
+            currentCheckNumber = incomingIntent.getIntExtra("CURRENT_CHECK", 1)
+            prefs.edit().putInt("cached_current_check", currentCheckNumber).apply()
+        } else {
+            currentCheckNumber = prefs.getInt("cached_current_check", 1)
+        }
+
+        if (incomingIntent.hasExtra("TOTAL_CHECKS")) {
+            totalChecksNumber = incomingIntent.getIntExtra("TOTAL_CHECKS", 1)
+            prefs.edit().putInt("cached_total_checks", totalChecksNumber).apply()
+        } else {
+            totalChecksNumber = prefs.getInt("cached_total_checks", 1)
+        }
 
         isLockdownActive = true
-        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
         prefs.edit()
             .putBoolean("is_lockdown_active", true)
             .putLong("active_alarm_id", alarmId)
@@ -103,7 +117,6 @@ class AlarmTriggerActivity : ComponentActivity() {
         loadAlarmData(alarmId)
     }
 
-    // Home ya Recent dabate hi turant wapas WAKELOCK screen par le aana
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (isLockdownActive) {
