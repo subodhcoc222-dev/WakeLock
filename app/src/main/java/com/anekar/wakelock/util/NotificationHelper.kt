@@ -24,7 +24,6 @@ object NotificationHelper {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-            // चैनल साउंड को null रखा गया है ताकि Android सिस्टम और AudioHijackManager का डबल साउंड ओवरलैप न हो
             val alarmChannel = NotificationChannel(
                 CHANNEL_ALARM_ID,
                 context.getString(R.string.channel_alarm_name),
@@ -67,7 +66,13 @@ object NotificationHelper {
     fun buildAlarmNotification(context: Context, alarmId: Long, label: String): Notification {
         val fullScreenIntent = Intent(context, AlarmTriggerActivity::class.java).apply {
             putExtra("ALARM_ID", alarmId)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra("IS_WAKEUP_CHECK", false)
+            putExtra("IS_PUNISHMENT", false)
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
             context,
@@ -84,7 +89,8 @@ object NotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setFullScreenIntent(fullScreenPendingIntent, true)
-            .setSound(null) // नोटिफिकेशन साउंड म्यूट, केवल AudioHijackManager आवाज़ संभालेगा
+            .setContentIntent(fullScreenPendingIntent)
+            .setSound(null)
             .setOngoing(true)
             .setAutoCancel(false)
             .build()
