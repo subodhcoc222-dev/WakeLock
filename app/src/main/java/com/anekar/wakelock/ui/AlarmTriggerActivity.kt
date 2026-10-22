@@ -52,6 +52,7 @@ class AlarmTriggerActivity : ComponentActivity() {
     private var currentCheckNumber by mutableIntStateOf(1)
     private var totalChecksNumber by mutableIntStateOf(1)
     private var currentAlarm by mutableStateOf<AlarmEntity?>(null)
+    private var isLockdownActive = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,7 +91,40 @@ class AlarmTriggerActivity : ComponentActivity() {
         currentCheckNumber = incomingIntent.getIntExtra("CURRENT_CHECK", 1)
         totalChecksNumber = incomingIntent.getIntExtra("TOTAL_CHECKS", 1)
 
+        isLockdownActive = true
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putBoolean("is_lockdown_active", true)
+            .putLong("active_alarm_id", alarmId)
+            .putBoolean("is_punishment_active", isPunishment)
+            .putBoolean("is_wakeup_active", isWakeUpCheck)
+            .apply()
+
         loadAlarmData(alarmId)
+    }
+
+    // Home ya Recent dabate hi turant wapas WAKELOCK screen par le aana
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (isLockdownActive) {
+            bringToFront()
+        }
+    }
+
+    private fun bringToFront() {
+        val reopenIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
+            putExtra("ALARM_ID", alarmId)
+            putExtra("IS_WAKEUP_CHECK", isWakeUpCheck)
+            putExtra("IS_PUNISHMENT", isPunishment)
+            putExtra("CURRENT_CHECK", currentCheckNumber)
+            putExtra("TOTAL_CHECKS", totalChecksNumber)
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+        }
+        startActivity(reopenIntent)
     }
 
     private fun loadAlarmData(targetId: Long) {
@@ -300,6 +334,12 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Button(
                     onClick = {
+                        isLockdownActive = false
+                        getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean("is_lockdown_active", false)
+                            .apply()
+
                         val serviceIntent = Intent(this@AlarmTriggerActivity, WakeUpSurveillanceService::class.java).apply {
                             action = WakeUpSurveillanceService.ACTION_CONFIRM_AWAKE
                         }
@@ -546,6 +586,12 @@ class AlarmTriggerActivity : ComponentActivity() {
                     correctHash = alarm.masterPinHash,
                     onDismiss = { showPinDialog = false },
                     onSuccess = {
+                        isLockdownActive = false
+                        getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean("is_lockdown_active", false)
+                            .apply()
+
                         if (isPunishment) {
                             val serviceIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
                                 action = PunishmentGauntletService.ACTION_TERMINATE_WITH_PIN
@@ -562,6 +608,12 @@ class AlarmTriggerActivity : ComponentActivity() {
     }
 
     private fun onGauntletCompleted(alarm: AlarmEntity) {
+        isLockdownActive = false
+        getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("is_lockdown_active", false)
+            .apply()
+
         if (isPunishment) {
             val serviceIntent = Intent(this, PunishmentGauntletService::class.java).apply {
                 action = PunishmentGauntletService.ACTION_SOLVED_ROUND
