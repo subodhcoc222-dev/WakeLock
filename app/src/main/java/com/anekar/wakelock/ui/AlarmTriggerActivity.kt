@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.os.CountDownTimer
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.WindowManager
@@ -54,6 +53,11 @@ class AlarmTriggerActivity : ComponentActivity() {
     private var totalChecksNumber: Int = 1
     private var currentAlarm: AlarmEntity? = null
 
+    // 5-मिनट म्यूट केवल 1 बार के लिए
+    companion object {
+        var hasUsedGraceMute: Boolean = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -73,14 +77,6 @@ class AlarmTriggerActivity : ComponentActivity() {
         isPunishment = intent.getBooleanExtra("IS_PUNISHMENT", false)
         currentCheckNumber = intent.getIntExtra("CURRENT_CHECK", 1)
         totalChecksNumber = intent.getIntExtra("TOTAL_CHECKS", 1)
-
-        // Math Mission solve karte waqt siren ko mute karna
-        if (!isWakeUpCheck) {
-            val muteIntent = Intent(this, AlarmForegroundService::class.java).apply {
-                action = AlarmForegroundService.ACTION_STOP_ALARM
-            }
-            startService(muteIntent)
-        }
 
         setContent {
             WakelockTheme {
@@ -108,7 +104,7 @@ class AlarmTriggerActivity : ComponentActivity() {
         if (isWakeUpCheck) {
             WakeUpCheckScreen(currentCheckNumber, totalChecksNumber)
         } else if (alarm != null) {
-            MathGauntletScreen(alarm)
+            AlarmWorkflowScreen(alarm)
         } else {
             Box(
                 modifier = Modifier
@@ -117,6 +113,94 @@ class AlarmTriggerActivity : ComponentActivity() {
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = LaserGreen)
+            }
+        }
+    }
+
+    @Composable
+    private fun AlarmWorkflowScreen(alarm: AlarmEntity) {
+        // पहली अवस्था: अलार्म बज रहा है (DISMISS बटन के साथ)
+        var isDismissedToMission by remember { mutableStateOf(false) }
+
+        if (!isDismissedToMission && !isPunishment) {
+            RingingAlarmScreen(
+                onDismiss = {
+                    isDismissedToMission = true
+                    if (!hasUsedGraceMute) {
+                        hasUsedGraceMute = true
+                        // पहली बार: 5-मिनट का म्यूट
+                        val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                            action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
+                        }
+                        startService(muteIntent)
+                    } else {
+                        // दूसरी बार: कोई म्यूट नहीं, सायरन बजता रहेगा
+                    }
+                }
+            )
+        } else {
+            MathGauntletScreen(alarm)
+        }
+    }
+
+    @Composable
+    private fun RingingAlarmScreen(onDismiss: () -> Unit) {
+        val infiniteTransition = rememberInfiniteTransition(label = "alarmPulse")
+        val pulseScale by infiniteTransition.animateFloat(
+            initialValue = 0.92f,
+            targetValue = 1.08f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(500, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulseScale"
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(PureBlack)
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "CRITICAL ALARM ACTIVE",
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = ThreatCrimson,
+                    letterSpacing = 2.sp
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = if (!hasUsedGraceMute) "DISMISS GRANTS 5-MIN CALM TO SOLVE" else "NO MUTE AVAILABLE // SOLVE UNDER SIREN",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = if (!hasUsedGraceMute) LaserGreen else ThreatCrimson
+                )
+                Spacer(modifier = Modifier.height(60.dp))
+
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(230.dp)
+                        .scale(pulseScale),
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = ThreatCrimson)
+                ) {
+                    Text(
+                        text = "DISMISS &\nSOLVE MISSION",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = TextPrimary,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         }
     }
@@ -155,12 +239,11 @@ class AlarmTriggerActivity : ComponentActivity() {
                     letterSpacing = 1.5.sp
                 )
                 Spacer(modifier = Modifier.height(10.dp))
-                // Wake-up Check Live Counter
                 Text(
                     text = "CHECK $currentCheck OF $totalChecks",
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp,
+                    fontSize = 22.sp,
                     color = TextPrimary
                 )
                 Spacer(modifier = Modifier.height(4.dp))
@@ -205,45 +288,55 @@ class AlarmTriggerActivity : ComponentActivity() {
         val difficulty = if (isPunishment) MissionDifficulty.SEVEN_DIGIT else alarm.missionDifficulty
         var problem by remember { mutableStateOf(MathMissionGenerator.generateProblem(difficulty)) }
         var userInput by remember { mutableStateOf("") }
-        var timeLeft by remember { mutableIntStateOf(alarm.timeoutSeconds) }
         var feedbackMessage by remember { mutableStateOf<String?>(null) }
         var isAnswerCorrect by remember { mutableStateOf(false) }
         var showPinDialog by remember { mutableStateOf(false) }
 
-        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-
-        // Countdown Timer
-        DisposableEffect(currentRound, problem) {
-            val timer = object : CountDownTimer((timeLeft * 1000).toLong(), 1000) {
-                override fun onTick(millisUntilFinished: Long) {
-                    timeLeft = (millisUntilFinished / 1000).toInt()
-                }
-
-                override fun onFinish() {
-                    // Timeout -> Play alarm siren and reset problem
-                    val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
-                        action = AlarmForegroundService.ACTION_START_ALARM
-                        putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm.id)
-                    }
-                    startService(sirenIntent)
-
-                    vibrateError(vibrator)
-                    problem = MathMissionGenerator.generateProblem(difficulty)
-                    userInput = ""
-                    timeLeft = alarm.timeoutSeconds
-                    feedbackMessage = "TIMEOUT // ALARM TRIGGERED"
-                    isAnswerCorrect = false
-                    start()
-                }
-            }.start()
-
-            onDispose { timer.cancel() }
+        // 5-मिनट म्यूट ग्रेस टाइमर (300 सेकंड्स)
+        var graceSecondsLeft by remember { mutableIntStateOf(300) }
+        LaunchedEffect(Unit) {
+            while (graceSecondsLeft > 0) {
+                delay(1000L)
+                graceSecondsLeft--
+            }
+            // 5 मिनट खत्म -> सायरन वापस शुरू
+            val resumeAlarmIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                action = AlarmForegroundService.ACTION_START_ALARM
+                putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm.id)
+            }
+            startService(resumeAlarmIntent)
         }
 
-        // Keypad button dabane par timer reset karne ka function
-        fun resetTimerOnTyping() {
+        // सवाल का टाइमर (कोरूटीन आधारित ताकि कीपैड दबाने पर 100% सही रीसेट हो)
+        var timerKey by remember { mutableIntStateOf(0) }
+        var timeLeft by remember { mutableIntStateOf(alarm.timeoutSeconds) }
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+
+        LaunchedEffect(currentRound, problem, timerKey) {
             timeLeft = alarm.timeoutSeconds
+            while (timeLeft > 0) {
+                delay(1000L)
+                timeLeft--
+            }
+            // 30s टाइमआउट होने पर:
+            vibrateError(vibrator)
+            val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                action = AlarmForegroundService.ACTION_START_ALARM
+                putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm.id)
+            }
+            startService(sirenIntent)
+
+            problem = MathMissionGenerator.generateProblem(difficulty)
+            userInput = ""
+            feedbackMessage = "TIMEOUT // ALARM RESUMED"
+            isAnswerCorrect = false
+            timerKey++
+        }
+
+        // कीपैड का कोई भी बटन दबाने पर टाइमर 30 पर रीसेट
+        fun onTypingReset() {
             feedbackMessage = null
+            timerKey++
         }
 
         Box(
@@ -257,6 +350,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                     .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // टॉप बार: राउंड्स और 30s टाइमर
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -273,12 +367,12 @@ class AlarmTriggerActivity : ComponentActivity() {
                         text = "${timeLeft}s",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
+                        fontSize = 18.sp,
                         color = if (timeLeft <= 10) ThreatCrimson else TextPrimary
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 LinearProgressIndicator(
                     progress = { timeLeft.toFloat() / alarm.timeoutSeconds.toFloat() },
                     modifier = Modifier
@@ -288,9 +382,23 @@ class AlarmTriggerActivity : ComponentActivity() {
                     trackColor = SubtleBorder
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                // 5-मिनट म्यूट ग्रेस इंडिकेटर
+                if (graceSecondsLeft > 0 && !isPunishment) {
+                    val m = graceSecondsLeft / 60
+                    val s = graceSecondsLeft % 60
+                    Text(
+                        text = String.format("CALM MUTE WINDOW: %02d:%02d", m, s),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = LaserGreen,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
 
-                // Feedback Banner
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // फीडबैक बैनर
                 if (feedbackMessage != null) {
                     Text(
                         text = feedbackMessage!!,
@@ -298,11 +406,11 @@ class AlarmTriggerActivity : ComponentActivity() {
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         color = if (isAnswerCorrect) LaserGreen else ThreatCrimson,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                        modifier = Modifier.padding(bottom = 6.dp)
                     )
                 }
 
-                // 6-Chain Addition Numbers
+                // 6-चेन वर्टिकल नंबर्स
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -348,18 +456,18 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Keypad with auto-timer reset
+                // कीपैड: किसी भी बटन पर टाइमर 30 पर रीसेट
                 NumericKeypad(
                     onDigit = { digit ->
                         if (userInput.length < 15) {
                             userInput += digit
-                            resetTimerOnTyping()
+                            onTypingReset()
                         }
                     },
                     onBackspace = {
                         if (userInput.isNotEmpty()) {
                             userInput = userInput.dropLast(1)
-                            resetTimerOnTyping()
+                            onTypingReset()
                         }
                     },
                     onSubmit = {
@@ -368,23 +476,24 @@ class AlarmTriggerActivity : ComponentActivity() {
                             feedbackMessage = "CORRECT ANSWER ✓"
                             isAnswerCorrect = true
                             CoroutineScope(Dispatchers.Main).launch {
-                                delay(400)
+                                delay(350)
                                 if (currentRound < totalRounds) {
                                     currentRound++
                                     problem = MathMissionGenerator.generateProblem(difficulty)
                                     userInput = ""
-                                    timeLeft = alarm.timeoutSeconds
                                     feedbackMessage = null
+                                    timerKey++
                                 } else {
                                     onGauntletCompleted(alarm)
                                 }
                             }
                         } else {
+                            // गलत उत्तर: अलार्म तुरंत नहीं बजेगा, बस इनपुट खाली और टाइमर रीसेट
                             vibrateError(vibrator)
                             feedbackMessage = "WRONG! TRY AGAIN"
                             isAnswerCorrect = false
                             userInput = ""
-                            resetTimerOnTyping()
+                            onTypingReset()
                         }
                     }
                 )
@@ -405,6 +514,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                     correctHash = alarm.masterPinHash,
                     onDismiss = { showPinDialog = false },
                     onSuccess = {
+                        hasUsedGraceMute = false
                         if (isPunishment) {
                             val serviceIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
                                 action = PunishmentGauntletService.ACTION_TERMINATE_WITH_PIN
@@ -421,6 +531,8 @@ class AlarmTriggerActivity : ComponentActivity() {
     }
 
     private fun onGauntletCompleted(alarm: AlarmEntity) {
+        hasUsedGraceMute = false
+
         if (isPunishment) {
             val serviceIntent = Intent(this, PunishmentGauntletService::class.java).apply {
                 action = PunishmentGauntletService.ACTION_SOLVED_ROUND
@@ -446,9 +558,9 @@ class AlarmTriggerActivity : ComponentActivity() {
 
     private fun vibrateError(vibrator: Vibrator) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE))
+            vibrator.vibrate(VibrationEffect.createOneShot(250, VibrationEffect.DEFAULT_AMPLITUDE))
         } else {
-            vibrator.vibrate(300)
+            vibrator.vibrate(250)
         }
     }
 
