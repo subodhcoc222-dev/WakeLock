@@ -48,6 +48,7 @@ class AlarmForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_START_ALARM
         val alarmId = intent?.getLongExtra(EXTRA_ALARM_ID, -1L) ?: -1L
+        val failedCheckIndex = intent?.getIntExtra("FAILED_CHECK_INDEX", 1) ?: 1
 
         when (action) {
             ACTION_START_ALARM -> {
@@ -55,6 +56,7 @@ class AlarmForegroundService : Service() {
                 prefs.edit()
                     .putBoolean("is_alarm_active", true)
                     .putLong("active_alarm_id", alarmId)
+                    .putInt("failed_wakeup_multiplier", failedCheckIndex)
                     .apply()
 
                 val notification = NotificationHelper.buildAlarmNotification(
@@ -83,6 +85,7 @@ class AlarmForegroundService : Service() {
                 val triggerIntent = Intent(this, AlarmTriggerActivity::class.java).apply {
                     putExtra("ALARM_ID", alarmId)
                     putExtra("IS_PUNISHMENT", false)
+                    putExtra("FAILED_CHECK_INDEX", failedCheckIndex)
                     addFlags(
                         Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -104,7 +107,10 @@ class AlarmForegroundService : Service() {
             ACTION_STOP_ALARM -> {
                 audioHijackManager.stopAlarmTone()
                 val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-                prefs.edit().putBoolean("is_alarm_active", false).apply()
+                prefs.edit()
+                    .putBoolean("is_alarm_active", false)
+                    .putInt("failed_wakeup_multiplier", 1)
+                    .apply()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
