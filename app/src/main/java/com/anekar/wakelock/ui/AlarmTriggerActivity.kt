@@ -51,6 +51,7 @@ class AlarmTriggerActivity : ComponentActivity() {
     private var isPunishment by mutableStateOf(false)
     private var currentCheckNumber by mutableIntStateOf(1)
     private var totalChecksNumber by mutableIntStateOf(1)
+    private var failedWakeUpMultiplier by mutableIntStateOf(1)
     private var currentAlarm by mutableStateOf<AlarmEntity?>(null)
     private var isLockdownActive = true
 
@@ -91,7 +92,12 @@ class AlarmTriggerActivity : ComponentActivity() {
         isWakeUpCheck = incomingIntent.getBooleanExtra("IS_WAKEUP_CHECK", false)
         isPunishment = incomingIntent.getBooleanExtra("IS_PUNISHMENT", false)
 
-        // Single Source of Truth: Default 1 par override hone se bachana
+        // Multiplier tracking: check index se multiply karein
+        failedWakeUpMultiplier = incomingIntent.getIntExtra(
+            "FAILED_CHECK_INDEX",
+            prefs.getInt("failed_wakeup_multiplier", 1)
+        ).coerceAtLeast(1)
+
         if (incomingIntent.hasExtra("CURRENT_CHECK")) {
             currentCheckNumber = incomingIntent.getIntExtra("CURRENT_CHECK", 1)
             prefs.edit().putInt("cached_current_check", currentCheckNumber).apply()
@@ -131,6 +137,7 @@ class AlarmTriggerActivity : ComponentActivity() {
             putExtra("IS_PUNISHMENT", isPunishment)
             putExtra("CURRENT_CHECK", currentCheckNumber)
             putExtra("TOTAL_CHECKS", totalChecksNumber)
+            putExtra("FAILED_CHECK_INDEX", failedWakeUpMultiplier)
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
@@ -163,9 +170,15 @@ class AlarmTriggerActivity : ComponentActivity() {
                 totalChecks = totalChecksNumber,
                 onTimeout = {
                     isWakeUpCheck = false
+                    // Current check number ko multiplier banayein
+                    failedWakeUpMultiplier = currentCheckNumber.coerceAtLeast(1)
+                    val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putInt("failed_wakeup_multiplier", failedWakeUpMultiplier).apply()
+
                     val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
                         action = AlarmForegroundService.ACTION_START_ALARM
                         putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm?.id ?: alarmId)
+                        putExtra("FAILED_CHECK_INDEX", failedWakeUpMultiplier)
                     }
                     startService(sirenIntent)
                 }
@@ -237,10 +250,15 @@ class AlarmTriggerActivity : ComponentActivity() {
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = "DISMISS TO START CALM SOLVING",
+                    text = if (failedWakeUpMultiplier > 1) {
+                        "SURVEILLANCE PENALTY // ${failedWakeUpMultiplier}X MULTIPLIER"
+                    } else {
+                        "DISMISS TO START CALM SOLVING"
+                    },
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = LaserGreen
+                    color = if (failedWakeUpMultiplier > 1) ThreatCrimson else LaserGreen,
+                    fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(60.dp))
 
@@ -380,7 +398,12 @@ class AlarmTriggerActivity : ComponentActivity() {
     @Composable
     private fun MathGauntletScreen(alarm: AlarmEntity) {
         var currentRound by remember { mutableIntStateOf(1) }
-        val totalRounds = if (isPunishment) 1 else alarm.roundsCount
+        
+        // Dynamic Multiplier: Base rounds * failed check index
+        val baseRounds = if (isPunishment) 1 else alarm.roundsCount
+        val multiplier = if (isPunishment) 1 else failedWakeUpMultiplier
+        val totalRounds = (baseRounds * multiplier).coerceAtLeast(1)
+
         val difficulty = if (isPunishment) MissionDifficulty.SEVEN_DIGIT else alarm.missionDifficulty
         var problem by remember { mutableStateOf(MathMissionGenerator.generateProblem(difficulty)) }
         var userInput by remember { mutableStateOf("") }
@@ -458,7 +481,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
-                        color = if (isPunishment) ThreatCrimson else LaserGreen
+                        color = if (isPunishment || multiplier > 1) ThreatCrimson else LaserGreen
                     )
                     Text(
                         text = "${timeLeft}s",
@@ -469,13 +492,24 @@ class AlarmTriggerActivity : ComponentActivity() {
                     )
                 }
 
+                if (multiplier > 1 && !isPunishment) {
+                    Text(
+                        text = "CHECK #$multiplier MISSED // ${multiplier}X PENALTY ACTIVE",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                        color = ThreatCrimson,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(6.dp))
                 LinearProgressIndicator(
                     progress = { timeLeft.toFloat() / alarm.timeoutSeconds.toFloat() },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(3.dp),
-                    color = if (isPunishment || timeLeft <= 10) ThreatCrimson else LaserGreen,
+                    color = if (isPunishment || timeLeft <= 10 || multiplier > 1) ThreatCrimson else LaserGreen,
                     trackColor = SubtleBorder
                 )
 
@@ -600,10 +634,12 @@ class AlarmTriggerActivity : ComponentActivity() {
                     onDismiss = { showPinDialog = false },
                     onSuccess = {
                         isLockdownActive = false
-                        getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-                            .edit()
+                        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                        prefs.edit()
                             .putBoolean("is_lockdown_active", false)
+                            .putInt("failed_wakeup_multiplier", 1)
                             .apply()
+                        failedWakeUpMultiplier = 1
 
                         if (isPunishment) {
                             val serviceIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
@@ -622,10 +658,12 @@ class AlarmTriggerActivity : ComponentActivity() {
 
     private fun onGauntletCompleted(alarm: AlarmEntity) {
         isLockdownActive = false
-        getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-            .edit()
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
             .putBoolean("is_lockdown_active", false)
+            .putInt("failed_wakeup_multiplier", 1)
             .apply()
+        failedWakeUpMultiplier = 1
 
         if (isPunishment) {
             val serviceIntent = Intent(this, PunishmentGauntletService::class.java).apply {
