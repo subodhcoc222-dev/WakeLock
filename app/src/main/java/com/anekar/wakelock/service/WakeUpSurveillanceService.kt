@@ -185,9 +185,14 @@ class WakeUpSurveillanceService : Service() {
 
             stopForeground(STOP_FOREGROUND_REMOVE)
 
+            // Multiplier save karein
+            val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+            prefs.edit().putInt("failed_wakeup_multiplier", currentCheckIndex).apply()
+
             val alarmServiceIntent = Intent(this, AlarmForegroundService::class.java).apply {
                 action = AlarmForegroundService.ACTION_START_ALARM
                 putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarmId)
+                putExtra("FAILED_CHECK_INDEX", currentCheckIndex)
             }
             startService(alarmServiceIntent)
         }
@@ -199,6 +204,7 @@ class WakeUpSurveillanceService : Service() {
         prefs.edit()
             .putBoolean("is_surveillance_active", false)
             .putInt("cached_current_check", 1)
+            .putInt("failed_wakeup_multiplier", 1)
             .apply()
 
         CoroutineScope(Dispatchers.IO).launch {
