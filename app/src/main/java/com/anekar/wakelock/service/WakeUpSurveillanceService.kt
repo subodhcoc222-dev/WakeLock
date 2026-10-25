@@ -28,6 +28,7 @@ class WakeUpSurveillanceService : Service() {
 
     private var alarmId: Long = -1L
     private var intervalSeconds: Int = 600
+    private var isTaperMode: Boolean = false
     private var totalDurationSeconds: Int = 7200
     private var totalChecksCount: Int = 1
     private var currentCheckIndex: Int = 1
@@ -38,6 +39,7 @@ class WakeUpSurveillanceService : Service() {
         const val ACTION_CONFIRM_AWAKE = "ACTION_CONFIRM_AWAKE"
         const val ACTION_CANCEL_SURVEILLANCE = "ACTION_CANCEL_SURVEILLANCE"
         const val EXTRA_ALARM_ID = "EXTRA_ALARM_ID"
+        const val TAPER_SENTINEL_INTERVAL = -1
     }
 
     override fun onCreate() {
@@ -66,6 +68,7 @@ class WakeUpSurveillanceService : Service() {
                     .putBoolean("is_surveillance_active", true)
                     .putLong("active_alarm_id", alarmId)
                     .putInt("cached_current_check", 1)
+                    .putInt("failed_check_index", 0)
                     .apply()
 
                 startSurveillanceForeground()
@@ -119,8 +122,21 @@ class WakeUpSurveillanceService : Service() {
             val alarm = db.alarmDao().getAlarmById(alarmId) ?: return@launch
 
             intervalSeconds = alarm.wakeUpIntervalSeconds
+            isTaperMode = (intervalSeconds == TAPER_SENTINEL_INTERVAL)
             totalDurationSeconds = alarm.wakeUpTotalDurationSeconds
-            totalChecksCount = (totalDurationSeconds / intervalSeconds).coerceAtLeast(1)
+
+            totalChecksCount = if (isTaperMode) {
+                // First 30m = 6 checks @ 5m (1800s); remaining @ 10m (600s)
+                val firstPhaseTime = 6 * 300
+                if (totalDurationSeconds <= firstPhaseTime) {
+                    (totalDurationSeconds / 300).coerceAtLeast(1)
+                } else {
+                    val remainingTime = totalDurationSeconds - firstPhaseTime
+                    6 + (remainingTime / 600)
+                }
+            } else {
+                (totalDurationSeconds / intervalSeconds.coerceAtLeast(60)).coerceAtLeast(1)
+            }
 
             val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
             prefs.edit()
@@ -130,22 +146,33 @@ class WakeUpSurveillanceService : Service() {
 
             val startTime = System.currentTimeMillis()
             val endTime = startTime + (totalDurationSeconds * 1000L)
+            val initialDelay = getIntervalForNextCheck(currentCheckIndex)
 
             db.alarmDao().updateSurveillanceState(
                 id = alarmId,
                 isActive = true,
                 startTime = startTime,
                 endTime = endTime,
-                nextCheck = startTime + (intervalSeconds * 1000L)
+                nextCheck = startTime + (initialDelay * 1000L)
             )
 
             scheduleNextCheck()
         }
     }
 
+    private fun getIntervalForNextCheck(checkIndex: Int): Int {
+        return if (isTaperMode) {
+            // Checks 1 to 6 (First 30m) = 5m (300s); Checks 7+ = 10m (600s)
+            if (checkIndex <= 6) 300 else 600
+        } else {
+            intervalSeconds.coerceAtLeast(60)
+        }
+    }
+
     private fun scheduleNextCheck() {
         handler.removeCallbacks(checkTriggerRunnable)
-        handler.postDelayed(checkTriggerRunnable, intervalSeconds * 1000L)
+        val delaySec = getIntervalForNextCheck(currentCheckIndex)
+        handler.postDelayed(checkTriggerRunnable, delaySec * 1000L)
     }
 
     private val checkTriggerRunnable = Runnable {
@@ -185,9 +212,8 @@ class WakeUpSurveillanceService : Service() {
 
             stopForeground(STOP_FOREGROUND_REMOVE)
 
-            // Multiplier save karein
             val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-            prefs.edit().putInt("failed_wakeup_multiplier", currentCheckIndex).apply()
+            prefs.edit().putInt("failed_check_index", currentCheckIndex).apply()
 
             val alarmServiceIntent = Intent(this, AlarmForegroundService::class.java).apply {
                 action = AlarmForegroundService.ACTION_START_ALARM
@@ -204,7 +230,7 @@ class WakeUpSurveillanceService : Service() {
         prefs.edit()
             .putBoolean("is_surveillance_active", false)
             .putInt("cached_current_check", 1)
-            .putInt("failed_wakeup_multiplier", 1)
+            .putInt("failed_check_index", 0)
             .apply()
 
         CoroutineScope(Dispatchers.IO).launch {
