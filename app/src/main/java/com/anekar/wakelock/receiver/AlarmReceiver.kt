@@ -35,16 +35,16 @@ class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         acquireWakeLock(context)
 
-        // Fresh scheduled alarm ke liye multiplier hamesha 1 rahega
+        // Reset check index to 0 for initial scheduled alarm
         val prefs = context.getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putInt("failed_wakeup_multiplier", 1).apply()
+        prefs.edit().putInt("failed_check_index", 0).apply()
 
         val alarmId = intent.getLongExtra("ALARM_ID", -1L)
 
         val serviceIntent = Intent(context, AlarmForegroundService::class.java).apply {
             action = AlarmForegroundService.ACTION_START_ALARM
             putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarmId)
-            putExtra("FAILED_CHECK_INDEX", 1)
+            putExtra("FAILED_CHECK_INDEX", 0)
         }
         ContextCompat.startForegroundService(context, serviceIntent)
     }
