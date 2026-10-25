@@ -131,9 +131,8 @@ class MainActivity : ComponentActivity() {
                 FloatingActionButton(
                     onClick = {
                         editingAlarm = AlarmEntity(
-                            targetHour = 5,
-                            targetMinute = 0,
-                            repeatDaysBitmask = 127,
+                            hour = 5,
+                            minute = 0,
                             roundsCount = 5,
                             missionDifficulty = MissionDifficulty.TWO_DIGIT,
                             wakeUpIntervalSeconds = -1, // Default to ⚡ Taper
@@ -185,9 +184,10 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onToggle = { enabled ->
                                     CoroutineScope(Dispatchers.IO).launch {
-                                        db.alarmDao().setAlarmEnabled(alarm.id, enabled)
+                                        val updatedAlarm = alarm.copy(isEnabled = enabled)
+                                        db.alarmDao().updateAlarm(updatedAlarm)
                                         if (enabled) {
-                                            scheduleSystemAlarm(context, alarm.copy(isEnabled = true))
+                                            scheduleSystemAlarm(context, updatedAlarm)
                                         } else {
                                             cancelSystemAlarm(context, alarm.id)
                                         }
@@ -249,13 +249,12 @@ class MainActivity : ComponentActivity() {
         onToggle: (Boolean) -> Unit,
         onDelete: () -> Unit
     ) {
-        val timeFormatted = String.format("%02d:%02d", alarm.targetHour, alarm.targetMinute)
-        val amPm = if (alarm.targetHour < 12) "AM" else "PM"
-        val hour12 = when (val h = alarm.targetHour % 12) {
+        val amPm = if (alarm.hour < 12) "AM" else "PM"
+        val hour12 = when (val h = alarm.hour % 12) {
             0 -> 12
             else -> h
         }
-        val displayTime = String.format("%02d:%02d", hour12, alarm.targetMinute)
+        val displayTime = String.format("%02d:%02d", hour12, alarm.minute)
 
         Card(
             modifier = Modifier
@@ -347,9 +346,8 @@ class MainActivity : ComponentActivity() {
         onSave: (AlarmEntity) -> Unit
     ) {
         val context = LocalContext.current
-        var targetHour by remember { mutableIntStateOf(alarm.targetHour) }
-        var targetMinute by remember { mutableIntStateOf(alarm.targetMinute) }
-        var repeatDaysBitmask by remember { mutableIntStateOf(alarm.repeatDaysBitmask) }
+        var targetHour by remember { mutableIntStateOf(alarm.hour) }
+        var targetMinute by remember { mutableIntStateOf(alarm.minute) }
         var roundsCount by remember { mutableIntStateOf(alarm.roundsCount) }
         var missionDifficulty by remember { mutableStateOf(alarm.missionDifficulty) }
         var wakeUpIntervalSeconds by remember { mutableIntStateOf(alarm.wakeUpIntervalSeconds) }
@@ -385,7 +383,7 @@ class MainActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 1. TARGET TIME
+                    // TARGET TIME (TAP TO CHANGE)
                     Text(
                         text = "TARGET TIME (TAP TO CHANGE)",
                         fontFamily = FontFamily.Monospace,
@@ -448,47 +446,7 @@ class MainActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 2. REPEAT DAYS
-                    Text(
-                        text = "REPEAT PROTOCOL DAYS",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = TextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    val days = listOf("M", "T", "W", "T", "F", "S", "S")
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        days.forEachIndexed { index, day ->
-                            val isSelected = (repeatDaysBitmask and (1 shl index)) != 0
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .background(
-                                        if (isSelected) LaserGreen else ElevatedSurface,
-                                        CircleShape
-                                    )
-                                    .clickable {
-                                        repeatDaysBitmask = repeatDaysBitmask xor (1 shl index)
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = day,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = if (isSelected) PureBlack else TextPrimary
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // 3. MATH ROUNDS
+                    // MATH ROUNDS (PROBLEMS TO SOLVE)
                     Text(
                         text = "MATH ROUNDS (PROBLEMS TO SOLVE)",
                         fontFamily = FontFamily.Monospace,
@@ -531,7 +489,7 @@ class MainActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 4. MISSION DIFFICULTY
+                    // MISSION DIFFICULTY (6-CHAIN)
                     Text(
                         text = "MISSION DIFFICULTY (6-CHAIN)",
                         fontFamily = FontFamily.Monospace,
@@ -574,7 +532,7 @@ class MainActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 5. WAKE-UP CHECK INTERVAL (WITH ⚡ TAPER CHIP)
+                    // WAKE-UP CHECK INTERVAL (WITH ⚡ TAPER)
                     Text(
                         text = "WAKE-UP CHECK INTERVAL",
                         fontFamily = FontFamily.Monospace,
@@ -584,7 +542,6 @@ class MainActivity : ComponentActivity() {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // -1 represents ⚡ Taper Mode (30m @ 5m -> then 10m)
                     val intervalOptions = listOf(
                         -1 to "⚡ Taper",
                         300 to "5m",
@@ -637,7 +594,7 @@ class MainActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 6. SURVEILLANCE DURATION
+                    // SURVEILLANCE DURATION (WITH 2 HOURS)
                     Text(
                         text = "SURVEILLANCE DURATION",
                         fontFamily = FontFamily.Monospace,
@@ -688,7 +645,7 @@ class MainActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 7. MASTER PIN
+                    // MASTER PIN
                     Text(
                         text = "UPDATE MASTER PIN (OR LEAVE BLANK TO KEEP)",
                         fontFamily = FontFamily.Monospace,
@@ -737,7 +694,7 @@ class MainActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // 8. ACTION BUTTONS
+                    // ACTION BUTTONS
                     Button(
                         onClick = {
                             var finalHash = alarm.masterPinHash
@@ -750,9 +707,8 @@ class MainActivity : ComponentActivity() {
                             }
 
                             val updated = alarm.copy(
-                                targetHour = targetHour,
-                                targetMinute = targetMinute,
-                                repeatDaysBitmask = repeatDaysBitmask,
+                                hour = targetHour,
+                                minute = targetMinute,
                                 roundsCount = roundsCount,
                                 missionDifficulty = missionDifficulty,
                                 wakeUpIntervalSeconds = wakeUpIntervalSeconds,
@@ -797,8 +753,8 @@ class MainActivity : ComponentActivity() {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
         val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, alarm.targetHour)
-            set(Calendar.MINUTE, alarm.targetMinute)
+            set(Calendar.HOUR_OF_DAY, alarm.hour)
+            set(Calendar.MINUTE, alarm.minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
             if (timeInMillis <= System.currentTimeMillis()) {
