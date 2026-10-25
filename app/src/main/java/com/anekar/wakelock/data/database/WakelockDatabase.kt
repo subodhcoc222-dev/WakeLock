@@ -11,7 +11,7 @@ import com.anekar.wakelock.data.model.Converters
 
 @Database(
     entities = [AlarmEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
