@@ -399,10 +399,14 @@ fun AlarmProtocolCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            val intervalDisplay = if (alarm.wakeUpIntervalSeconds == -1) {
-                "⚡ TAPER"
-            } else {
-                "${alarm.wakeUpIntervalSeconds}s"
+            val taperTag = if (alarm.isTaperEnabled) "⚡ TAPER + " else ""
+            val intervalDisplay = when {
+                alarm.wakeUpIntervalSeconds < 60 -> "${alarm.wakeUpIntervalSeconds}s"
+                else -> "${alarm.wakeUpIntervalSeconds / 60}m"
+            }
+            val durationDisplay = when {
+                alarm.wakeUpTotalDurationSeconds < 3600 -> "${alarm.wakeUpTotalDurationSeconds / 60}m"
+                else -> "${alarm.wakeUpTotalDurationSeconds / 3600}h"
             }
 
             Row(
@@ -417,7 +421,7 @@ fun AlarmProtocolCard(
                 )
                 Text(text = "•", color = TextMuted)
                 Text(
-                    text = "CHECK: $intervalDisplay / ${alarm.wakeUpTotalDurationSeconds / 60}m",
+                    text = "CHECK: $taperTag$intervalDisplay / $durationDisplay",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = LaserGreen
@@ -441,9 +445,10 @@ fun AddOrEditProtocolDialog(
             addAll(alarmToEdit?.daysOfWeek ?: listOf(1, 2, 3, 4, 5, 6, 7))
         }
     }
-    var difficulty by remember { mutableStateOf(alarmToEdit?.missionDifficulty ?: MissionDifficulty.SEVEN_DIGIT) }
-    var rounds by remember { mutableIntStateOf(alarmToEdit?.roundsCount ?: 2) }
-    var wakeIntervalSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpIntervalSeconds ?: -1) }
+    var difficulty by remember { mutableStateOf(alarmToEdit?.missionDifficulty ?: MissionDifficulty.TWO_DIGIT) }
+    var rounds by remember { mutableIntStateOf(alarmToEdit?.roundsCount ?: 5) }
+    var isTaperEnabled by remember { mutableStateOf(alarmToEdit?.isTaperEnabled ?: true) }
+    var wakeIntervalSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpIntervalSeconds ?: 600) }
     var wakeDurationSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpTotalDurationSeconds ?: 7200) }
     var masterPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
@@ -631,12 +636,77 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 5. Wake-Up Check Interval (WITH ⚡ TAPER)
+                // 5. Dedicated Taper Switch Card
                 item {
-                    Text("WAKE-UP CHECK INTERVAL", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                1.dp,
+                                if (isTaperEnabled) LaserGreen else SubtleBorder,
+                                RoundedCornerShape(8.dp)
+                            ),
+                        colors = CardDefaults.cardColors(containerColor = if (isTaperEnabled) ElevatedSurface else PureBlack),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "⚡ TAPER SURVEILLANCE",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = if (isTaperEnabled) LaserGreen else TextPrimary
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = if (isTaperEnabled) "Enabled: Strict 5m checks for first 30m" else "Disabled: Fixed interval only",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = TextMuted
+                                    )
+                                }
+                                Switch(
+                                    checked = isTaperEnabled,
+                                    onCheckedChange = { isTaperEnabled = it },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = PureBlack,
+                                        checkedTrackColor = LaserGreen,
+                                        uncheckedThumbColor = TextMuted,
+                                        uncheckedTrackColor = DarkSurface
+                                    )
+                                )
+                            }
+                            if (isTaperEnabled) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                HorizontalDivider(color = SubtleBorder, thickness = 0.5.dp)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "First 30m checks every 5m (6 checks) ➔ Then automatically shifts to the interval chosen below.",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = LaserGreen
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 6. Regular Wake-Up Check Interval
+                item {
+                    Text(
+                        text = if (isTaperEnabled) "SECONDARY CHECK INTERVAL (AFTER 30m)" else "WAKE-UP CHECK INTERVAL",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TextMuted
+                    )
                     Spacer(modifier = Modifier.height(6.dp))
                     val intervals = listOf(
-                        -1 to "⚡ Taper",
                         30 to "30s (Test)",
                         60 to "1m (Test)",
                         120 to "2m (Test)",
@@ -663,19 +733,9 @@ fun AddOrEditProtocolDialog(
                             )
                         }
                     }
-
-                    if (wakeIntervalSec == -1) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "⚡ TAPER: First 30m checks every 5m (6 checks) ➔ Then every 10m until duration ends.",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = LaserGreen
-                        )
-                    }
                 }
 
-                // 6. Surveillance Duration
+                // 7. Surveillance Duration
                 item {
                     Text("SURVEILLANCE DURATION", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -709,7 +769,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 7. Master PIN Setup
+                // 8. Master PIN Setup
                 item {
                     Text(
                         if (alarmToEdit != null) "UPDATE MASTER PIN (OR LEAVE BLANK TO KEEP)" else "SET MASTER PIN (4-8 DIGITS)",
@@ -775,6 +835,7 @@ fun AddOrEditProtocolDialog(
                             missionDifficulty = difficulty,
                             roundsCount = rounds,
                             timeoutSeconds = difficulty.defaultTimeoutSec,
+                            isTaperEnabled = isTaperEnabled,
                             wakeUpIntervalSeconds = wakeIntervalSec,
                             wakeUpTotalDurationSeconds = wakeDurationSec,
                             masterPinHash = pinHash
