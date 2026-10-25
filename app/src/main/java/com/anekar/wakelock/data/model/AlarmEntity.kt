@@ -21,11 +21,12 @@ data class AlarmEntity(
     val ringtoneUri: String = "",
     val daysOfWeek: List<Int> = emptyList(), // 1=Mon, 2=Tue, ..., 7=Sun
     val isEnabled: Boolean = true,
-    val missionDifficulty: MissionDifficulty = MissionDifficulty.SEVEN_DIGIT,
-    val roundsCount: Int = 2,
-    val timeoutSeconds: Int = 55,
-    val wakeUpIntervalSeconds: Int = 600, // 30s/60s for test, 300s/600s for production
-    val wakeUpTotalDurationSeconds: Int = 7200, // 60s/120s for test, 3600s/7200s for production
+    val missionDifficulty: MissionDifficulty = MissionDifficulty.TWO_DIGIT,
+    val roundsCount: Int = 5,
+    val timeoutSeconds: Int = 30,
+    val isTaperEnabled: Boolean = true, // Independent 30m @ 5m Taper Switch
+    val wakeUpIntervalSeconds: Int = 600, // Regular interval after taper or when taper is off
+    val wakeUpTotalDurationSeconds: Int = 7200, // 2 Hours default
     val masterPinHash: String, // SHA-256 hashed PIN
     
     // Active Surveillance & Anti-Tamper States
