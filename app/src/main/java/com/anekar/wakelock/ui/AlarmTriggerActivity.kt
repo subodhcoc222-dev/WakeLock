@@ -9,7 +9,6 @@ import android.os.Vibrator
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,7 +21,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -33,7 +31,6 @@ import com.anekar.wakelock.data.model.AlarmEntity
 import com.anekar.wakelock.data.model.MissionDifficulty
 import com.anekar.wakelock.data.WakelockSecurity
 import com.anekar.wakelock.domain.math.MathMissionGenerator
-import com.anekar.wakelock.domain.math.MathProblem
 import com.anekar.wakelock.service.AlarmForegroundService
 import com.anekar.wakelock.service.PunishmentGauntletService
 import com.anekar.wakelock.service.WakeUpSurveillanceService
@@ -51,7 +48,7 @@ class AlarmTriggerActivity : ComponentActivity() {
     private var isPunishment by mutableStateOf(false)
     private var currentCheckNumber by mutableIntStateOf(1)
     private var totalChecksNumber by mutableIntStateOf(1)
-    private var failedWakeUpMultiplier by mutableIntStateOf(1)
+    private var failedCheckIndex by mutableIntStateOf(0)
     private var currentAlarm by mutableStateOf<AlarmEntity?>(null)
     private var isLockdownActive = true
 
@@ -92,11 +89,10 @@ class AlarmTriggerActivity : ComponentActivity() {
         isWakeUpCheck = incomingIntent.getBooleanExtra("IS_WAKEUP_CHECK", false)
         isPunishment = incomingIntent.getBooleanExtra("IS_PUNISHMENT", false)
 
-        // Multiplier tracking: check index se multiply karein
-        failedWakeUpMultiplier = incomingIntent.getIntExtra(
+        failedCheckIndex = incomingIntent.getIntExtra(
             "FAILED_CHECK_INDEX",
-            prefs.getInt("failed_wakeup_multiplier", 1)
-        ).coerceAtLeast(1)
+            prefs.getInt("failed_check_index", 0)
+        )
 
         if (incomingIntent.hasExtra("CURRENT_CHECK")) {
             currentCheckNumber = incomingIntent.getIntExtra("CURRENT_CHECK", 1)
@@ -118,6 +114,7 @@ class AlarmTriggerActivity : ComponentActivity() {
             .putLong("active_alarm_id", alarmId)
             .putBoolean("is_punishment_active", isPunishment)
             .putBoolean("is_wakeup_active", isWakeUpCheck)
+            .putInt("failed_check_index", failedCheckIndex)
             .apply()
 
         loadAlarmData(alarmId)
@@ -137,7 +134,7 @@ class AlarmTriggerActivity : ComponentActivity() {
             putExtra("IS_PUNISHMENT", isPunishment)
             putExtra("CURRENT_CHECK", currentCheckNumber)
             putExtra("TOTAL_CHECKS", totalChecksNumber)
-            putExtra("FAILED_CHECK_INDEX", failedWakeUpMultiplier)
+            putExtra("FAILED_CHECK_INDEX", failedCheckIndex)
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
@@ -170,15 +167,14 @@ class AlarmTriggerActivity : ComponentActivity() {
                 totalChecks = totalChecksNumber,
                 onTimeout = {
                     isWakeUpCheck = false
-                    // Current check number ko multiplier banayein
-                    failedWakeUpMultiplier = currentCheckNumber.coerceAtLeast(1)
+                    failedCheckIndex = currentCheckNumber.coerceAtLeast(1)
                     val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-                    prefs.edit().putInt("failed_wakeup_multiplier", failedWakeUpMultiplier).apply()
+                    prefs.edit().putInt("failed_check_index", failedCheckIndex).apply()
 
                     val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
                         action = AlarmForegroundService.ACTION_START_ALARM
                         putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm?.id ?: alarmId)
-                        putExtra("FAILED_CHECK_INDEX", failedWakeUpMultiplier)
+                        putExtra("FAILED_CHECK_INDEX", failedCheckIndex)
                     }
                     startService(sirenIntent)
                 }
@@ -250,14 +246,14 @@ class AlarmTriggerActivity : ComponentActivity() {
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = if (failedWakeUpMultiplier > 1) {
-                        "SURVEILLANCE PENALTY // ${failedWakeUpMultiplier}X MULTIPLIER"
+                    text = if (failedCheckIndex > 0) {
+                        "CHECK #$failedCheckIndex MISSED // ${failedCheckIndex + 2}X PENALTY ARMED"
                     } else {
                         "DISMISS TO START CALM SOLVING"
                     },
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = if (failedWakeUpMultiplier > 1) ThreatCrimson else LaserGreen,
+                    color = if (failedCheckIndex > 0) ThreatCrimson else LaserGreen,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(60.dp))
@@ -399,9 +395,13 @@ class AlarmTriggerActivity : ComponentActivity() {
     private fun MathGauntletScreen(alarm: AlarmEntity) {
         var currentRound by remember { mutableIntStateOf(1) }
         
-        // Dynamic Multiplier: Base rounds * failed check index
+        // Formula 1: BaseRounds * (CheckIndex + 2) when missed; normal = BaseRounds
         val baseRounds = if (isPunishment) 1 else alarm.roundsCount
-        val multiplier = if (isPunishment) 1 else failedWakeUpMultiplier
+        val multiplier = when {
+            isPunishment -> 1
+            failedCheckIndex > 0 -> (failedCheckIndex + 2)
+            else -> 1
+        }
         val totalRounds = (baseRounds * multiplier).coerceAtLeast(1)
 
         val difficulty = if (isPunishment) MissionDifficulty.SEVEN_DIGIT else alarm.missionDifficulty
@@ -492,9 +492,9 @@ class AlarmTriggerActivity : ComponentActivity() {
                     )
                 }
 
-                if (multiplier > 1 && !isPunishment) {
+                if (failedCheckIndex > 0 && !isPunishment) {
                     Text(
-                        text = "CHECK #$multiplier MISSED // ${multiplier}X PENALTY ACTIVE",
+                        text = "CHECK #$failedCheckIndex MISSED // ${multiplier}X PENALTY ($totalRounds ROUNDS)",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 10.sp,
@@ -637,9 +637,9 @@ class AlarmTriggerActivity : ComponentActivity() {
                         val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
                         prefs.edit()
                             .putBoolean("is_lockdown_active", false)
-                            .putInt("failed_wakeup_multiplier", 1)
+                            .putInt("failed_check_index", 0)
                             .apply()
-                        failedWakeUpMultiplier = 1
+                        failedCheckIndex = 0
 
                         if (isPunishment) {
                             val serviceIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
@@ -661,9 +661,9 @@ class AlarmTriggerActivity : ComponentActivity() {
         val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
         prefs.edit()
             .putBoolean("is_lockdown_active", false)
-            .putInt("failed_wakeup_multiplier", 1)
+            .putInt("failed_check_index", 0)
             .apply()
-        failedWakeUpMultiplier = 1
+        failedCheckIndex = 0
 
         if (isPunishment) {
             val serviceIntent = Intent(this, PunishmentGauntletService::class.java).apply {
