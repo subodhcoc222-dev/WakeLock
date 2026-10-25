@@ -24,9 +24,10 @@ data class AlarmEntity(
     val missionDifficulty: MissionDifficulty = MissionDifficulty.TWO_DIGIT,
     val roundsCount: Int = 5,
     val timeoutSeconds: Int = 30,
-    val isTaperEnabled: Boolean = true, // Independent 30m @ 5m Taper Switch
-    val wakeUpIntervalSeconds: Int = 600, // Regular interval after taper or when taper is off
-    val wakeUpTotalDurationSeconds: Int = 7200, // 2 Hours default
+    val taperIntervalSeconds: Int = 300, // 0 = OFF, 30 = 30s test, 300 = 5m prod
+    val taperDurationSeconds: Int = 1800, // 60 = 1m test, 1800 = 30m prod
+    val wakeUpIntervalSeconds: Int = 600, // Regular interval after taper
+    val wakeUpTotalDurationSeconds: Int = 7200, // Total surveillance duration
     val masterPinHash: String, // SHA-256 hashed PIN
     
     // Active Surveillance & Anti-Tamper States
