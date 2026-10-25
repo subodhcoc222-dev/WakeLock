@@ -28,7 +28,7 @@ class WakeUpSurveillanceService : Service() {
 
     private var alarmId: Long = -1L
     private var intervalSeconds: Int = 600
-    private var isTaperMode: Boolean = false
+    private var isTaperMode: Boolean = true
     private var totalDurationSeconds: Int = 7200
     private var totalChecksCount: Int = 1
     private var currentCheckIndex: Int = 1
@@ -39,7 +39,6 @@ class WakeUpSurveillanceService : Service() {
         const val ACTION_CONFIRM_AWAKE = "ACTION_CONFIRM_AWAKE"
         const val ACTION_CANCEL_SURVEILLANCE = "ACTION_CANCEL_SURVEILLANCE"
         const val EXTRA_ALARM_ID = "EXTRA_ALARM_ID"
-        const val TAPER_SENTINEL_INTERVAL = -1
     }
 
     override fun onCreate() {
@@ -121,21 +120,29 @@ class WakeUpSurveillanceService : Service() {
             val db = WakelockDatabase.getDatabase(applicationContext)
             val alarm = db.alarmDao().getAlarmById(alarmId) ?: return@launch
 
-            intervalSeconds = alarm.wakeUpIntervalSeconds
-            isTaperMode = (intervalSeconds == TAPER_SENTINEL_INTERVAL)
+            intervalSeconds = alarm.wakeUpIntervalSeconds.coerceAtLeast(30)
+            isTaperMode = alarm.isTaperEnabled
             totalDurationSeconds = alarm.wakeUpTotalDurationSeconds
 
             totalChecksCount = if (isTaperMode) {
-                // First 30m = 6 checks @ 5m (1800s); remaining @ 10m (600s)
-                val firstPhaseTime = 6 * 300
-                if (totalDurationSeconds <= firstPhaseTime) {
-                    (totalDurationSeconds / 300).coerceAtLeast(1)
+                if (totalDurationSeconds < 1800) {
+                    val testTaperTime = 2 * 30
+                    if (totalDurationSeconds <= testTaperTime) {
+                        (totalDurationSeconds / 30).coerceAtLeast(1)
+                    } else {
+                        2 + ((totalDurationSeconds - testTaperTime) / intervalSeconds).coerceAtLeast(1)
+                    }
                 } else {
-                    val remainingTime = totalDurationSeconds - firstPhaseTime
-                    6 + (remainingTime / 600)
+                    val taperTime = 6 * 300 // 1800s = 30 minutes
+                    if (totalDurationSeconds <= taperTime) {
+                        (totalDurationSeconds / 300).coerceAtLeast(1)
+                    } else {
+                        val remainingTime = totalDurationSeconds - taperTime
+                        6 + (remainingTime / intervalSeconds).coerceAtLeast(1)
+                    }
                 }
             } else {
-                (totalDurationSeconds / intervalSeconds.coerceAtLeast(60)).coerceAtLeast(1)
+                (totalDurationSeconds / intervalSeconds).coerceAtLeast(1)
             }
 
             val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
@@ -162,10 +169,14 @@ class WakeUpSurveillanceService : Service() {
 
     private fun getIntervalForNextCheck(checkIndex: Int): Int {
         return if (isTaperMode) {
-            // Checks 1 to 6 (First 30m) = 5m (300s); Checks 7+ = 10m (600s)
-            if (checkIndex <= 6) 300 else 600
+            if (totalDurationSeconds < 1800) {
+                if (checkIndex <= 2) 30 else intervalSeconds
+            } else {
+                // First 30 minutes (Checks 1 to 6) = 5m (300s); Check 7+ = User-selected interval
+                if (checkIndex <= 6) 300 else intervalSeconds
+            }
         } else {
-            intervalSeconds.coerceAtLeast(60)
+            intervalSeconds
         }
     }
 
