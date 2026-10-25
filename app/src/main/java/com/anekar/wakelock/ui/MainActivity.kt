@@ -399,7 +399,13 @@ fun AlarmProtocolCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            val taperTag = if (alarm.isTaperEnabled) "⚡ TAPER + " else ""
+            val taperText = if (alarm.taperIntervalSeconds > 0) {
+                val tInt = if (alarm.taperIntervalSeconds < 60) "${alarm.taperIntervalSeconds}s" else "${alarm.taperIntervalSeconds / 60}m"
+                val tDur = if (alarm.taperDurationSeconds < 60) "${alarm.taperDurationSeconds}s" else "${alarm.taperDurationSeconds / 60}m"
+                "⚡ TAPER ($tDur @ $tInt) ➔ "
+            } else {
+                ""
+            }
             val intervalDisplay = when {
                 alarm.wakeUpIntervalSeconds < 60 -> "${alarm.wakeUpIntervalSeconds}s"
                 else -> "${alarm.wakeUpIntervalSeconds / 60}m"
@@ -421,7 +427,7 @@ fun AlarmProtocolCard(
                 )
                 Text(text = "•", color = TextMuted)
                 Text(
-                    text = "CHECK: $taperTag$intervalDisplay / $durationDisplay",
+                    text = "CHECK: $taperText$intervalDisplay / $durationDisplay",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = LaserGreen
@@ -447,9 +453,15 @@ fun AddOrEditProtocolDialog(
     }
     var difficulty by remember { mutableStateOf(alarmToEdit?.missionDifficulty ?: MissionDifficulty.TWO_DIGIT) }
     var rounds by remember { mutableIntStateOf(alarmToEdit?.roundsCount ?: 5) }
-    var isTaperEnabled by remember { mutableStateOf(alarmToEdit?.isTaperEnabled ?: true) }
+    
+    // Taper Phase Settings
+    var taperIntervalSec by remember { mutableIntStateOf(alarmToEdit?.taperIntervalSeconds ?: 300) }
+    var taperDurationSec by remember { mutableIntStateOf(alarmToEdit?.taperDurationSeconds ?: 1800) }
+    
+    // Regular Phase Settings
     var wakeIntervalSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpIntervalSeconds ?: 600) }
     var wakeDurationSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpTotalDurationSeconds ?: 7200) }
+    
     var masterPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
@@ -636,71 +648,95 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 5. Dedicated Taper Switch Card
+                // 5. TAPER CHECK INTERVAL (PHASE 1)
                 item {
-                    Card(
+                    Text(
+                        text = "PHASE 1: TAPER CHECK INTERVAL",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (taperIntervalSec > 0) LaserGreen else TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    val taperIntervals = listOf(
+                        0 to "OFF",
+                        30 to "30s (Test)",
+                        60 to "1m (Test)",
+                        120 to "2m (Test)",
+                        300 to "5m (Prod)",
+                        600 to "10m"
+                    )
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(
-                                1.dp,
-                                if (isTaperEnabled) LaserGreen else SubtleBorder,
-                                RoundedCornerShape(8.dp)
-                            ),
-                        colors = CardDefaults.cardColors(containerColor = if (isTaperEnabled) ElevatedSurface else PureBlack),
-                        shape = RoundedCornerShape(8.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "⚡ TAPER SURVEILLANCE",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp,
-                                        color = if (isTaperEnabled) LaserGreen else TextPrimary
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = if (isTaperEnabled) "Enabled: Strict 5m checks for first 30m" else "Disabled: Fixed interval only",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        color = TextMuted
-                                    )
-                                }
-                                Switch(
-                                    checked = isTaperEnabled,
-                                    onCheckedChange = { isTaperEnabled = it },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = PureBlack,
-                                        checkedTrackColor = LaserGreen,
-                                        uncheckedThumbColor = TextMuted,
-                                        uncheckedTrackColor = DarkSurface
-                                    )
+                        taperIntervals.forEach { (sec, label) ->
+                            FilterChip(
+                                selected = taperIntervalSec == sec,
+                                onClick = { taperIntervalSec = sec },
+                                label = { Text(label, fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = LaserGreen,
+                                    selectedLabelColor = PureBlack
                                 )
-                            }
-                            if (isTaperEnabled) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                HorizontalDivider(color = SubtleBorder, thickness = 0.5.dp)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "First 30m checks every 5m (6 checks) ➔ Then automatically shifts to the interval chosen below.",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    color = LaserGreen
-                                )
-                            }
+                            )
                         }
                     }
                 }
 
-                // 6. Regular Wake-Up Check Interval
+                // 6. TAPER PHASE DURATION (Visible only if Taper != OFF)
+                if (taperIntervalSec > 0) {
+                    item {
+                        Text(
+                            text = "PHASE 1: TAPER DURATION",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = LaserGreen
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val taperDurations = listOf(
+                            60 to "1m (Test)",
+                            120 to "2m (Test)",
+                            300 to "5m (Test)",
+                            900 to "15m",
+                            1800 to "30m (Prod)"
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            taperDurations.forEach { (sec, label) ->
+                                FilterChip(
+                                    selected = taperDurationSec == sec,
+                                    onClick = { taperDurationSec = sec },
+                                    label = { Text(label, fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = LaserGreen,
+                                        selectedLabelColor = PureBlack
+                                    )
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        val checksInPhase1 = if (taperIntervalSec > 0) taperDurationSec / taperIntervalSec else 0
+                        Text(
+                            text = "⚡ Phase 1 executes $checksInPhase1 checks (every ${if (taperIntervalSec < 60) "${taperIntervalSec}s" else "${taperIntervalSec/60}m"}) before shifting.",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = LaserGreen
+                        )
+                    }
+                }
+
+                // 7. REGULAR CHECK INTERVAL (PHASE 2)
                 item {
                     Text(
-                        text = if (isTaperEnabled) "SECONDARY CHECK INTERVAL (AFTER 30m)" else "WAKE-UP CHECK INTERVAL",
+                        text = if (taperIntervalSec > 0) "PHASE 2: REGULAR INTERVAL (AFTER TAPER)" else "REGULAR CHECK INTERVAL",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         color = TextMuted
@@ -735,9 +771,9 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 7. Surveillance Duration
+                // 8. SURVEILLANCE DURATION (TOTAL)
                 item {
-                    Text("SURVEILLANCE DURATION", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
+                    Text("TOTAL SURVEILLANCE DURATION", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
                     val durations = listOf(
                         60 to "1m (Test)",
@@ -769,7 +805,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 8. Master PIN Setup
+                // 9. Master PIN Setup
                 item {
                     Text(
                         if (alarmToEdit != null) "UPDATE MASTER PIN (OR LEAVE BLANK TO KEEP)" else "SET MASTER PIN (4-8 DIGITS)",
@@ -835,7 +871,8 @@ fun AddOrEditProtocolDialog(
                             missionDifficulty = difficulty,
                             roundsCount = rounds,
                             timeoutSeconds = difficulty.defaultTimeoutSec,
-                            isTaperEnabled = isTaperEnabled,
+                            taperIntervalSeconds = taperIntervalSec,
+                            taperDurationSeconds = taperDurationSec,
                             wakeUpIntervalSeconds = wakeIntervalSec,
                             wakeUpTotalDurationSeconds = wakeDurationSec,
                             masterPinHash = pinHash
