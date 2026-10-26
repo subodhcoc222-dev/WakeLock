@@ -63,10 +63,24 @@ class WakeUpSurveillanceService : Service() {
 
         when (action) {
             ACTION_START_SURVEILLANCE -> {
-                alarmId = intent?.getLongExtra(EXTRA_ALARM_ID, -1L) ?: -1L
+                val incomingAlarmId = intent?.getLongExtra(EXTRA_ALARM_ID, -1L) ?: -1L
+                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                val isAlreadyActive = prefs.getBoolean("is_surveillance_active", false)
+                val existingActiveAlarmId = prefs.getLong("active_alarm_id", -1L)
+
+                // ANTI-HIJACK SHIELD:
+                // If a surveillance cycle is ALREADY running, strictly reject any other alarm
+                // from overwriting, resetting check counts, or hijacking the ongoing cycle.
+                if (isAlreadyActive && existingActiveAlarmId != -1L && incomingAlarmId != -1L && incomingAlarmId != existingActiveAlarmId) {
+                    return START_STICKY
+                }
+                if (isAlreadyActive && alarmId != -1L && alarmId == existingActiveAlarmId) {
+                    return START_STICKY
+                }
+
+                alarmId = if (incomingAlarmId != -1L) incomingAlarmId else existingActiveAlarmId
                 currentCheckIndex = 1
 
-                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
                 prefs.edit()
                     .putBoolean("is_surveillance_active", true)
                     .putLong("active_alarm_id", alarmId)
