@@ -1,7 +1,9 @@
 package com.anekar.wakelock.ui
 
 import android.app.TimePickerDialog
+import android.content.Context
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
@@ -119,8 +121,14 @@ fun MainDashboardScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val db = remember { WakelockDatabase.getDatabase(context) }
+    val prefs = remember { context.getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE) }
+
     var alarms by remember { mutableStateOf<List<AlarmEntity>>(emptyList()) }
     var permissionState by remember { mutableStateOf(checkPermissions(context)) }
+    var isSurveillanceActive by remember { mutableStateOf(false) }
+    var activeCurrentCheck by remember { mutableIntStateOf(1) }
+    var activeTotalChecks by remember { mutableIntStateOf(1) }
+
     var showConfigDialog by remember { mutableStateOf(false) }
     var editingAlarm by remember { mutableStateOf<AlarmEntity?>(null) }
     var selectedAlarmForPin by remember { mutableStateOf<AlarmEntity?>(null) }
@@ -129,9 +137,18 @@ fun MainDashboardScreen() {
     fun refreshAlarms() {
         CoroutineScope(Dispatchers.IO).launch {
             val list = db.alarmDao().getAllAlarms()
+            val activeInPrefs = prefs.getBoolean("is_surveillance_active", false)
+            val activeInDb = list.any { it.isSurveillanceActive }
+            val isRunning = activeInPrefs || activeInDb
+            val curCheck = prefs.getInt("cached_current_check", 1)
+            val totChecks = prefs.getInt("cached_total_checks", 1)
+
             withContext(Dispatchers.Main) {
                 alarms = list
                 permissionState = checkPermissions(context)
+                isSurveillanceActive = isRunning
+                activeCurrentCheck = curCheck
+                activeTotalChecks = totChecks
             }
         }
     }
@@ -153,14 +170,26 @@ fun MainDashboardScreen() {
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
-                    editingAlarm = null
-                    showConfigDialog = true
+                    if (isSurveillanceActive) {
+                        Toast.makeText(
+                            context,
+                            "SURVEILLANCE ACTIVE: SYSTEM LOCKED // CANNOT ADD PROTOCOLS",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        editingAlarm = null
+                        showConfigDialog = true
+                    }
                 },
-                containerColor = LaserGreen,
-                contentColor = PureBlack,
+                containerColor = if (isSurveillanceActive) DarkSurface else LaserGreen,
+                contentColor = if (isSurveillanceActive) TextMuted else PureBlack,
                 shape = CircleShape
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Add Alarm Protocol")
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "Add Alarm Protocol",
+                    tint = if (isSurveillanceActive) TextMuted else PureBlack
+                )
             }
         }
     ) { padding ->
@@ -200,12 +229,55 @@ fun MainDashboardScreen() {
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = if (permissionState.isAllGranted) "ARMED" else "UNPROTECTED",
+                            text = if (isSurveillanceActive) "SURVEILLANCE LOCKED" else if (permissionState.isAllGranted) "ARMED" else "UNPROTECTED",
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
                             fontSize = 10.sp,
-                            color = if (permissionState.isAllGranted) LaserGreen else ThreatCrimson
+                            color = if (isSurveillanceActive) ThreatCrimson else if (permissionState.isAllGranted) LaserGreen else ThreatCrimson
                         )
+                    }
+                }
+            }
+
+            // ACTIVE SURVEILLANCE LOCKDOWN BANNER
+            if (isSurveillanceActive) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, ThreatCrimson, RoundedCornerShape(8.dp)),
+                        colors = CardDefaults.cardColors(containerColor = ElevatedSurface),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(ThreatCrimson, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "ACTIVE SURVEILLANCE LOCKDOWN",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = ThreatCrimson,
+                                    letterSpacing = 1.sp
+                                )
+                                Text(
+                                    text = "Cycle in progress [Check $activeCurrentCheck of $activeTotalChecks]. Adding, modifying, or deleting protocols is disabled until complete.",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = TextMuted
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -247,34 +319,58 @@ fun MainDashboardScreen() {
                     AlarmProtocolCard(
                         alarm = alarm,
                         onCardClick = {
-                            selectedAlarmForPin = alarm
-                            pendingAction = {
-                                editingAlarm = alarm
-                                showConfigDialog = true
+                            if (isSurveillanceActive) {
+                                Toast.makeText(
+                                    context,
+                                    "SURVEILLANCE ACTIVE // CANNOT MODIFY PROTOCOLS",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                selectedAlarmForPin = alarm
+                                pendingAction = {
+                                    editingAlarm = alarm
+                                    showConfigDialog = true
+                                }
                             }
                         },
                         onToggle = {
-                            selectedAlarmForPin = alarm
-                            pendingAction = {
-                                val updatedState = !alarm.isEnabled
-                                CoroutineScope(Dispatchers.IO).launch {
-                                    db.alarmDao().updateAlarmState(alarm.id, updatedState)
-                                    if (updatedState) {
-                                        AlarmScheduler.scheduleAlarm(context, alarm.copy(isEnabled = true))
-                                    } else {
-                                        AlarmScheduler.cancelAlarm(context, alarm.id)
+                            if (isSurveillanceActive) {
+                                Toast.makeText(
+                                    context,
+                                    "SURVEILLANCE ACTIVE // CANNOT TOGGLE PROTOCOL",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                selectedAlarmForPin = alarm
+                                pendingAction = {
+                                    val updatedState = !alarm.isEnabled
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        db.alarmDao().updateAlarmState(alarm.id, updatedState)
+                                        if (updatedState) {
+                                            AlarmScheduler.scheduleAlarm(context, alarm.copy(isEnabled = true))
+                                        } else {
+                                            AlarmScheduler.cancelAlarm(context, alarm.id)
+                                        }
+                                        refreshAlarms()
                                     }
-                                    refreshAlarms()
                                 }
                             }
                         },
                         onDelete = {
-                            selectedAlarmForPin = alarm
-                            pendingAction = {
-                                CoroutineScope(Dispatchers.IO).launch {
-                                    AlarmScheduler.cancelAlarm(context, alarm.id)
-                                    db.alarmDao().deleteAlarm(alarm)
-                                    refreshAlarms()
+                            if (isSurveillanceActive) {
+                                Toast.makeText(
+                                    context,
+                                    "SURVEILLANCE ACTIVE // CANNOT DELETE PROTOCOL",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                selectedAlarmForPin = alarm
+                                pendingAction = {
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        AlarmScheduler.cancelAlarm(context, alarm.id)
+                                        db.alarmDao().deleteAlarm(alarm)
+                                        refreshAlarms()
+                                    }
                                 }
                             }
                         }
