@@ -15,11 +15,11 @@ enum class MissionDifficulty(val digits: Int, val defaultTimeoutSec: Int, val di
 data class AlarmEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val hour: Int, // 0-23 format
-    val minute: Int, // 0-59 format
+    val hour: Int,
+    val minute: Int,
     val label: String = "ALARM PROTOCOL",
-    val ringtoneUri: String = "",
-    val daysOfWeek: List<Int> = emptyList(), // 1=Mon, 2=Tue, ..., 7=Sun
+    val ringtoneUri: String = "", // Holds internal path to custom MP3/WAV or system ringtone
+    val daysOfWeek: List<Int> = emptyList(),
     val isEnabled: Boolean = true,
     val missionDifficulty: MissionDifficulty = MissionDifficulty.TWO_DIGIT,
     val roundsCount: Int = 5,
@@ -30,13 +30,17 @@ data class AlarmEntity(
     val wakeUpTotalDurationSeconds: Int = 7200,
     val masterPinHash: String,
 
-    // QR Physical Desk Anchor
+    // QR Desk Anchor
     val qrPayload: String = "",
     val qrChecksCount: Int = 0,
 
     // Smart Suspension Modes
     val skipNextOnce: Boolean = false,
     val pauseUntilTimestamp: Long = 0L,
+
+    // Brutal Penalty Configuration
+    val penaltyRoundsCount: Int = 100,
+    val penaltyCooldownSeconds: Long = 43200L, // 12 Hours default
 
     // Active Surveillance & Anti-Tamper States
     val isSurveillanceActive: Boolean = false,
