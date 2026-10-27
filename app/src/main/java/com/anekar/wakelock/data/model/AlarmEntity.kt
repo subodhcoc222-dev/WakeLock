@@ -24,15 +24,19 @@ data class AlarmEntity(
     val missionDifficulty: MissionDifficulty = MissionDifficulty.TWO_DIGIT,
     val roundsCount: Int = 5,
     val timeoutSeconds: Int = 30,
-    val taperIntervalSeconds: Int = 300, // 0 = OFF, 30 = 30s test, 300 = 5m prod
-    val taperDurationSeconds: Int = 1800, // 60 = 1m test, 1800 = 30m prod
-    val wakeUpIntervalSeconds: Int = 600, // Regular interval after taper
-    val wakeUpTotalDurationSeconds: Int = 7200, // Total surveillance duration
-    val masterPinHash: String, // SHA-256 hashed PIN
-    
-    // QR Code Integration (Physical Desk Anchor)
-    val qrPayload: String = "", // Empty = Normal Mode (No QR); Non-empty = Required Desk QR
-    val qrChecksCount: Int = 0, // 0 = Only Initial Alarm; 1..6 = First N taper checks require QR
+    val taperIntervalSeconds: Int = 300,
+    val taperDurationSeconds: Int = 1800,
+    val wakeUpIntervalSeconds: Int = 600,
+    val wakeUpTotalDurationSeconds: Int = 7200,
+    val masterPinHash: String,
+
+    // QR Physical Desk Anchor
+    val qrPayload: String = "",
+    val qrChecksCount: Int = 0,
+
+    // Smart Suspension Modes
+    val skipNextOnce: Boolean = false,
+    val pauseUntilTimestamp: Long = 0L,
 
     // Active Surveillance & Anti-Tamper States
     val isSurveillanceActive: Boolean = false,
