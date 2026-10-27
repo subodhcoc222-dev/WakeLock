@@ -1,130 +1,112 @@
 package com.anekar.wakelock.service.audio
 
 import android.content.Context
-import android.database.ContentObserver
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
-import android.provider.Settings
+import java.io.File
 
 class AudioHijackManager(private val context: Context) {
+
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var mediaPlayer: MediaPlayer? = null
-    private var volumeObserver: ContentObserver? = null
-    private val handler = Handler(Looper.getMainLooper())
+    private var originalVolume: Int = -1
 
-    fun forceMaxVolume() {
+    fun startAlarmTone(customUriOrPath: String?) {
+        stopAlarmTone()
+
         try {
-            val maxAlarmVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarmVol, 0)
-            
-            val maxMusicVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusicVol, 0)
+            originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+
+            mediaPlayer = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
+                        .build()
+                )
+
+                var isSourceSet = false
+                if (!customUriOrPath.isNullOrBlank()) {
+                    val file = File(customUriOrPath)
+                    if (file.exists() && file.canRead()) {
+                        setDataSource(file.absolutePath)
+                        isSourceSet = true
+                    } else {
+                        try {
+                            setDataSource(context, Uri.parse(customUriOrPath))
+                            isSourceSet = true
+                        } catch (e: Exception) {
+                            isSourceSet = false
+                        }
+                    }
+                }
+
+                if (!isSourceSet) {
+                    val defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                    setDataSource(context, defaultAlarmUri)
+                }
+
+                isLooping = true
+                prepare()
+                start()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            playFallbackBeep()
+        }
+    }
+
+    fun stopAlarmTone() {
+        try {
+            mediaPlayer?.let {
+                if (it.isPlaying) {
+                    it.stop()
+                }
+                it.reset()
+                it.release()
+            }
+            mediaPlayer = null
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    fun startVolumeLock() {
-        forceMaxVolume()
-        volumeObserver = object : ContentObserver(handler) {
-            override fun onChange(selfChange: Boolean) {
-                super.onChange(selfChange)
-                forceMaxVolume()
-            }
-        }
-        context.contentResolver.registerContentObserver(
-            Settings.System.CONTENT_URI,
-            true,
-            volumeObserver as ContentObserver
-        )
-    }
-
-    fun stopVolumeLock() {
-        volumeObserver?.let {
-            try {
-                context.contentResolver.unregisterContentObserver(it)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            volumeObserver = null
-        }
-    }
-
-    fun startAlarmTone(customUri: String?) {
-        stopAlarmTone()
-        startVolumeLock()
-
-        val alertUri: Uri = if (!customUri.isNullOrBlank()) {
-            Uri.parse(customUri)
-        } else {
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-        }
-
-        mediaPlayer = MediaPlayer().apply {
-            setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
-                    .build()
-            )
-            setDataSource(context, alertUri)
-            isLooping = true
-            prepare()
-            start()
-        }
-    }
-
     fun playDoubleBeep() {
-        forceMaxVolume()
-        val notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        val beepPlayer = MediaPlayer().apply {
-            setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
-                    .build()
-            )
-            setDataSource(context, notificationUri)
-            prepare()
-            start()
-        }
-
-        beepPlayer.setOnCompletionListener {
-            handler.postDelayed({
-                val secondBeep = MediaPlayer().apply {
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
-                            .build()
-                    )
-                    setDataSource(context, notificationUri)
-                    prepare()
-                    start()
-                }
-                secondBeep.setOnCompletionListener { player -> player.release() }
-            }, 180)
-            it.release()
+        try {
+            val beepUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val tempPlayer = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                setDataSource(context, beepUri)
+                prepare()
+                start()
+            }
+            tempPlayer.setOnCompletionListener { it.release() }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
-    fun stopAlarmTone() {
-        mediaPlayer?.let {
-            if (it.isPlaying) {
-                it.stop()
+    private fun playFallbackBeep() {
+        try {
+            val toneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            mediaPlayer = MediaPlayer.create(context, toneUri).apply {
+                isLooping = true
+                start()
             }
-            it.release()
-            mediaPlayer = null
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        stopVolumeLock()
     }
 }
