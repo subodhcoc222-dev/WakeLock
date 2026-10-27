@@ -13,7 +13,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.OptIn
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -32,7 +31,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
@@ -381,7 +379,7 @@ class AlarmTriggerActivity : ComponentActivity() {
         onTimeout: () -> Unit
     ) {
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        var checkTimeLeft by remember { mutableIntStateOf(45) } // 45s Safe Buffer for QR
+        var checkTimeLeft by remember { mutableIntStateOf(45) }
         var mismatchWarning by remember { mutableStateOf<String?>(null) }
 
         LaunchedEffect(Unit) {
@@ -436,7 +434,7 @@ class AlarmTriggerActivity : ComponentActivity() {
             }
         }
 
-        var isTorchOn by remember { mutableStateOf(true) } // Auto-Torch ON on start
+        var isTorchOn by remember { mutableStateOf(true) }
         var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
 
         Box(
@@ -465,7 +463,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                                 .build()
 
                             analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                                processImageProxy(scanner, imageProxy, onScanned)
+                                processImageProxyInternal(scanner, imageProxy, onScanned)
                             }
 
                             try {
@@ -487,7 +485,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // High-Tech Scanner Reticle Overlay
+                // Reticle Overlay
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -505,7 +503,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                     )
                 }
 
-                // Controls & Guidance Overlay
+                // Controls & HUD
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -556,7 +554,6 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    // Manual Flashlight Toggle Button
                     IconButton(
                         onClick = {
                             isTorchOn = !isTorchOn
@@ -614,12 +611,12 @@ class AlarmTriggerActivity : ComponentActivity() {
         }
     }
 
-    @OptIn(ExperimentalGetImage::class)
-    private fun processImageProxy(
+    private fun processImageProxyInternal(
         scanner: com.google.mlkit.vision.barcode.BarcodeScanner,
         imageProxy: ImageProxy,
         onScanned: (String) -> Unit
     ) {
+        @androidx.camera.core.ExperimentalGetImage
         val mediaImage = imageProxy.image
         if (mediaImage != null) {
             val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
@@ -747,7 +744,6 @@ class AlarmTriggerActivity : ComponentActivity() {
     private fun MathGauntletScreen(alarm: AlarmEntity) {
         var currentRound by remember { mutableIntStateOf(1) }
         
-        // Formula 1: BaseRounds * (CheckIndex + 2) when missed; normal = BaseRounds
         val baseRounds = if (isPunishment) 1 else alarm.roundsCount
         val multiplier = when {
             isPunishment -> 1
