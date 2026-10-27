@@ -1,5 +1,7 @@
 package com.anekar.wakelock.service
 
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -41,8 +43,10 @@ class WakeUpSurveillanceService : Service() {
     companion object {
         const val ACTION_START_SURVEILLANCE = "ACTION_START_SURVEILLANCE"
         const val ACTION_CONFIRM_AWAKE = "ACTION_CONFIRM_AWAKE"
+        const val ACTION_RESUME_FROM_PENALTY = "ACTION_RESUME_FROM_PENALTY"
         const val ACTION_CANCEL_SURVEILLANCE = "ACTION_CANCEL_SURVEILLANCE"
         const val EXTRA_ALARM_ID = "EXTRA_ALARM_ID"
+        private const val NOTIFICATION_CHECK_ALERT_ID = 4004
     }
 
     override fun onCreate() {
@@ -68,9 +72,6 @@ class WakeUpSurveillanceService : Service() {
                 val isAlreadyActive = prefs.getBoolean("is_surveillance_active", false)
                 val existingActiveAlarmId = prefs.getLong("active_alarm_id", -1L)
 
-                // ANTI-HIJACK SHIELD:
-                // If a surveillance cycle is ALREADY running, strictly reject any other alarm
-                // from overwriting, resetting check counts, or hijacking the ongoing cycle.
                 if (isAlreadyActive && existingActiveAlarmId != -1L && incomingAlarmId != -1L && incomingAlarmId != existingActiveAlarmId) {
                     return START_STICKY
                 }
@@ -91,9 +92,42 @@ class WakeUpSurveillanceService : Service() {
                 startSurveillanceForeground()
                 loadAlarmAndBeginSurveillance()
             }
+
+            ACTION_RESUME_FROM_PENALTY -> {
+                // FIXED DEAD LOOP: Resumes next check immediately after penalty math completion
+                isAwaitingResponse = false
+                handler.removeCallbacks(penaltyEscalationRunnable)
+
+                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+                val incomingAlarmId = intent?.getLongExtra(EXTRA_ALARM_ID, -1L) ?: -1L
+                if (alarmId <= 0) {
+                    alarmId = if (incomingAlarmId > 0) incomingAlarmId else prefs.getLong("active_alarm_id", -1L)
+                }
+
+                currentCheckIndex++
+                prefs.edit()
+                    .putBoolean("is_surveillance_active", true)
+                    .putInt("cached_current_check", currentCheckIndex)
+                    .putInt("failed_check_index", 0)
+                    .apply()
+
+                startSurveillanceForeground()
+
+                if (totalChecksCount <= 1 || secondaryIntervalSeconds <= 0) {
+                    loadAlarmAndBeginSurveillance()
+                } else if (currentCheckIndex <= totalChecksCount) {
+                    scheduleNextCheck()
+                } else {
+                    terminateSurveillance()
+                }
+            }
+
             ACTION_CONFIRM_AWAKE -> {
                 isAwaitingResponse = false
                 handler.removeCallbacks(penaltyEscalationRunnable)
+
+                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.cancel(NOTIFICATION_CHECK_ALERT_ID)
 
                 currentCheckIndex++
                 val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
@@ -105,6 +139,7 @@ class WakeUpSurveillanceService : Service() {
                     terminateSurveillance()
                 }
             }
+
             ACTION_CANCEL_SURVEILLANCE -> {
                 terminateSurveillance()
             }
@@ -223,7 +258,34 @@ class WakeUpSurveillanceService : Service() {
                 Intent.FLAG_ACTIVITY_SINGLE_TOP
             )
         }
-        startActivity(checkIntent)
+
+        // UNIVERSAL FULL-SCREEN INTENT (Wakes up lock-screens across Xiaomi, Oppo, Vivo, Samsung, Stock Android)
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            NOTIFICATION_CHECK_ALERT_ID,
+            checkIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val fullScreenNotification = NotificationCompat.Builder(this, NotificationHelper.CHANNEL_ALARM_ID)
+            .setSmallIcon(R.drawable.ic_lock_alarm)
+            .setContentTitle("WAKELOCK // CHECK $currentCheckIndex OF $totalChecksCount")
+            .setContentText("Tap to confirm awake status immediately.")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setFullScreenIntent(pendingIntent, true)
+            .setAutoCancel(true)
+            .build()
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIFICATION_CHECK_ALERT_ID, fullScreenNotification)
+
+        try {
+            startActivity(checkIntent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         handler.postDelayed(penaltyEscalationRunnable, 30 * 1000L)
     }
@@ -232,6 +294,9 @@ class WakeUpSurveillanceService : Service() {
         if (isAwaitingResponse) {
             isAwaitingResponse = false
             handler.removeCallbacks(checkTriggerRunnable)
+
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.cancel(NOTIFICATION_CHECK_ALERT_ID)
 
             stopForeground(STOP_FOREGROUND_REMOVE)
 
@@ -249,6 +314,9 @@ class WakeUpSurveillanceService : Service() {
 
     private fun terminateSurveillance() {
         handler.removeCallbacksAndMessages(null)
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancel(NOTIFICATION_CHECK_ALERT_ID)
+
         val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
         prefs.edit()
             .putBoolean("is_surveillance_active", false)
