@@ -61,6 +61,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 
+fun formatCooldownTime(millis: Long): String {
+    if (millis <= 0L) return "00h 00m 00s"
+    val totalSeconds = millis / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return String.format("%02dh %02dm %02ds", hours, minutes, seconds)
+}
+
 class AlarmTriggerActivity : ComponentActivity() {
 
     private var alarmId by mutableLongStateOf(-1L)
@@ -428,7 +437,6 @@ class AlarmTriggerActivity : ComponentActivity() {
             }
         }
 
-        // FLASHLIGHT IS OFF BY DEFAULT (NO AUTO-TORCH)
         var isTorchOn by remember { mutableStateOf(false) }
         var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
 
@@ -468,7 +476,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                                     analysis
                                 )
                                 cameraControl = cam.cameraControl
-                                // Automatic torch activation has been disabled
                             } catch (e: Exception) {
                                 e.printStackTrace()
                             }
@@ -478,7 +485,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // Reticle Overlay
                 Box(
                     modifier = Modifier.fillMaxSize().padding(32.dp),
                     contentAlignment = Alignment.Center
@@ -494,7 +500,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                     )
                 }
 
-                // Controls & HUD
                 Column(
                     modifier = Modifier.fillMaxSize().padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -718,6 +723,40 @@ class AlarmTriggerActivity : ComponentActivity() {
         var activityWatchdogKey by remember { mutableIntStateOf(0) }
         var isAlarmCurrentlyBlasting by remember { mutableStateOf(false) }
 
+        // REAL-TIME TICKER FOR MASTER PIN COOLDOWN (Updates every second)
+        val cooldownEndTime = remember { prefs.getLong("punishment_cooldown_end_time", 0L) }
+        var liveCooldownMillis by remember {
+            mutableLongStateOf((cooldownEndTime - System.currentTimeMillis()).coerceAtLeast(0L))
+        }
+
+        LaunchedEffect(cooldownEndTime) {
+            if (isPunishment && cooldownEndTime > System.currentTimeMillis()) {
+                while (true) {
+                    val remaining = cooldownEndTime - System.currentTimeMillis()
+                    liveCooldownMillis = remaining.coerceAtLeast(0L)
+                    if (remaining <= 0L) break
+                    delay(1000L)
+                }
+            } else {
+                liveCooldownMillis = 0L
+            }
+        }
+
+        // AUTO-MUTE SIREN AS SOON AS KEYPAD MOUNTS ON SCREEN
+        LaunchedEffect(Unit) {
+            val muteGauntlet = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
+                action = PunishmentGauntletService.ACTION_MUTE_SIREN
+            }
+            startService(muteGauntlet)
+
+            val muteAlarm = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
+            }
+            startService(muteAlarm)
+
+            isAlarmCurrentlyBlasting = false
+        }
+
         // WATCHDOG TIMER WITH HARD PROGRESS WIPEOUT ON 75s EXPIRY
         LaunchedEffect(currentRound, problem, activityWatchdogKey) {
             timeLeft = roundTimeCap
@@ -731,7 +770,6 @@ class AlarmTriggerActivity : ComponentActivity() {
             vibrateError(vibrator)
 
             if (isPunishment) {
-                // BLAST GAUNTLET SIREN & WIPE PROGRESS TO ROUND 1
                 val blastIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
                     action = PunishmentGauntletService.ACTION_BLAST_SIREN
                 }
@@ -754,21 +792,18 @@ class AlarmTriggerActivity : ComponentActivity() {
         }
 
         fun onUserActivityInput(digit: String? = null, isBackspace: Boolean = false) {
-            if (isAlarmCurrentlyBlasting) {
-                if (isPunishment) {
-                    val muteIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
-                        action = PunishmentGauntletService.ACTION_MUTE_SIREN
-                    }
-                    startService(muteIntent)
-                } else {
-                    val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
-                        action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
-                    }
-                    startService(muteIntent)
-                }
-                isAlarmCurrentlyBlasting = false
+            // Unconditionally mute sirens whenever user touches any key or backspace
+            val muteGauntlet = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
+                action = PunishmentGauntletService.ACTION_MUTE_SIREN
             }
+            startService(muteGauntlet)
 
+            val muteAlarm = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
+            }
+            startService(muteAlarm)
+
+            isAlarmCurrentlyBlasting = false
             feedbackMessage = null
 
             if (isBackspace) {
@@ -779,7 +814,6 @@ class AlarmTriggerActivity : ComponentActivity() {
                 userInput += digit
             }
 
-            // Any key press resets the 75s watchdog timer back to full
             activityWatchdogKey++
         }
 
@@ -818,6 +852,41 @@ class AlarmTriggerActivity : ComponentActivity() {
                     color = if (isPunishment || timeLeft <= 15) ThreatCrimson else LaserGreen,
                     trackColor = SubtleBorder
                 )
+
+                // LIVE HUD COUNTDOWN BANNER (Directly visible on screen)
+                if (isPunishment && liveCooldownMillis > 0L) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, ThreatCrimson, RoundedCornerShape(6.dp)),
+                        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "MASTER PIN LOCKOUT",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ThreatCrimson
+                            )
+                            Text(
+                                text = formatCooldownTime(liveCooldownMillis),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = WarningAmber
+                            )
+                        }
+                    }
+                }
 
                 Text(
                     text = if (isAlarmCurrentlyBlasting) "PRESS ANY KEY TO MUTE" else "TYPE/BACKSPACE RESETS 75s // 0s WIPES PROGRESS TO 1",
@@ -894,17 +963,10 @@ class AlarmTriggerActivity : ComponentActivity() {
                             feedbackMessage = "CORRECT ANSWER ✓"
                             isAnswerCorrect = true
                             if (isAlarmCurrentlyBlasting) {
-                                if (isPunishment) {
-                                    val muteIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
-                                        action = PunishmentGauntletService.ACTION_MUTE_SIREN
-                                    }
-                                    startService(muteIntent)
-                                } else {
-                                    val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
-                                        action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
-                                    }
-                                    startService(muteIntent)
+                                val muteIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
+                                    action = PunishmentGauntletService.ACTION_MUTE_SIREN
                                 }
+                                startService(muteIntent)
                                 isAlarmCurrentlyBlasting = false
                             }
 
@@ -928,7 +990,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                             feedbackMessage = "WRONG! TRY AGAIN"
                             isAnswerCorrect = false
                             userInput = ""
-                            activityWatchdogKey++ // Resets 75s so user can re-calculate peacefully
+                            activityWatchdogKey++
                         }
                     }
                 )
@@ -936,22 +998,23 @@ class AlarmTriggerActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "[ EMERGENCY MASTER PIN ]",
+                    text = if (isPunishment && liveCooldownMillis > 0L) {
+                        "[ EMERGENCY MASTER PIN (LOCKED: ${formatCooldownTime(liveCooldownMillis)}) ]"
+                    } else {
+                        "[ EMERGENCY MASTER PIN ]"
+                    },
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = TextMuted,
+                    color = if (isPunishment && liveCooldownMillis > 0L) WarningAmber else TextMuted,
                     modifier = Modifier.clickable { showPinDialog = true }
                 )
             }
 
             if (showPinDialog) {
-                val cooldownEndTime = prefs.getLong("punishment_cooldown_end_time", 0L)
-                val isCooldownActive = isPunishment && (System.currentTimeMillis() < cooldownEndTime)
-
                 MasterPinVerificationDialog(
                     correctHash = alarm.masterPinHash,
-                    isCooldownActive = isCooldownActive,
-                    cooldownRemainingMillis = (cooldownEndTime - System.currentTimeMillis()).coerceAtLeast(0L),
+                    isCooldownActive = isPunishment && liveCooldownMillis > 0L,
+                    cooldownRemainingMillis = liveCooldownMillis,
                     onDismiss = { showPinDialog = false },
                     onSuccess = {
                         isLockdownActive = false
@@ -1102,15 +1165,14 @@ fun MasterPinVerificationDialog(
     var enteredPin by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
 
-    val remainingHours = cooldownRemainingMillis / (1000 * 60 * 60)
-    val remainingMinutes = (cooldownRemainingMillis / (1000 * 60)) % 60
+    val isActuallyLocked = isCooldownActive && cooldownRemainingMillis > 0L
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = DarkSurface,
         title = {
             Text(
-                text = if (isCooldownActive) "PIN OVERRIDE LOCKED" else "ENTER MASTER PIN",
+                text = if (isActuallyLocked) "PIN OVERRIDE LOCKED" else "ENTER MASTER PIN",
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp,
@@ -1119,12 +1181,44 @@ fun MasterPinVerificationDialog(
         },
         text = {
             Column {
-                if (isCooldownActive) {
+                if (isActuallyLocked) {
                     Text(
-                        text = "PENALTY COOLDOWN ACTIVE // BYPASS RESTRICTED\nMaster PIN disabled for another ${remainingHours}h ${remainingMinutes}m.\nPowering off phone will reset countdown to zero.",
+                        text = "PENALTY COOLDOWN ACTIVE // BYPASS RESTRICTED",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
                         color = ThreatCrimson
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(ElevatedSurface, RoundedCornerShape(6.dp))
+                            .border(1.dp, WarningAmber, RoundedCornerShape(6.dp))
+                            .padding(12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "TIME REMAINING",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = TextMuted
+                            )
+                            Text(
+                                text = formatCooldownTime(cooldownRemainingMillis),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = WarningAmber
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Master PIN is completely disabled until cooldown timer hits zero.\nPowering off phone resets timer back to beginning.",
+                        fontSize = 11.sp,
+                        color = TextSecondary
                     )
                 } else {
                     Text(
@@ -1157,7 +1251,7 @@ fun MasterPinVerificationDialog(
             }
         },
         confirmButton = {
-            if (!isCooldownActive) {
+            if (!isActuallyLocked) {
                 Button(
                     onClick = {
                         if (WakelockSecurity.verifyPin(enteredPin, correctHash)) {
