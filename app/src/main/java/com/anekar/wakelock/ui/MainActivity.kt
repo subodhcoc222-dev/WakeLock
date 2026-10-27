@@ -10,7 +10,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.OptIn
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -34,7 +33,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
@@ -64,6 +62,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
+import kotlin.OptIn
 
 class MainActivity : ComponentActivity() {
 
@@ -133,7 +132,7 @@ fun SplashScreen() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainDashboardScreen() {
     val context = LocalContext.current
@@ -914,7 +913,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 7. TAPER PHASE DURATION (Visible only if Taper != OFF)
+                // 7. TAPER PHASE DURATION
                 if (taperIntervalSec > 0) {
                     item {
                         Text(
@@ -936,8 +935,8 @@ fun AddOrEditProtocolDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                             taperDurations.forEach { (sec, label) ->
                                 FilterChip(
                                     selected = taperDurationSec == sec,
@@ -1192,25 +1191,7 @@ fun DeskQrRegistrationDialog(
                                     .build()
 
                                 analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                                    val mediaImage = imageProxy.image
-                                    if (mediaImage != null) {
-                                        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                                        scanner.process(image)
-                                            .addOnSuccessListener { barcodes ->
-                                                for (barcode in barcodes) {
-                                                    val raw = barcode.rawValue
-                                                    if (!raw.isNullOrBlank()) {
-                                                        onScanned(raw)
-                                                        break
-                                                    }
-                                                }
-                                            }
-                                            .addOnCompleteListener {
-                                                imageProxy.close()
-                                            }
-                                    } else {
-                                        imageProxy.close()
-                                    }
+                                    processRegistrationImageProxy(scanner, imageProxy, onScanned)
                                 }
 
                                 try {
@@ -1281,5 +1262,32 @@ fun DeskQrRegistrationDialog(
                 }
             }
         }
+    }
+}
+
+private fun processRegistrationImageProxy(
+    scanner: com.google.mlkit.vision.barcode.BarcodeScanner,
+    imageProxy: ImageProxy,
+    onScanned: (String) -> Unit
+) {
+    @androidx.camera.core.ExperimentalGetImage
+    val mediaImage = imageProxy.image
+    if (mediaImage != null) {
+        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+        scanner.process(image)
+            .addOnSuccessListener { barcodes ->
+                for (barcode in barcodes) {
+                    val raw = barcode.rawValue
+                    if (!raw.isNullOrBlank()) {
+                        onScanned(raw)
+                        break
+                    }
+                }
+            }
+            .addOnCompleteListener {
+                imageProxy.close()
+            }
+    } else {
+        imageProxy.close()
     }
 }
