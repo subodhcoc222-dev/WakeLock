@@ -5,6 +5,7 @@ import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -27,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -62,6 +64,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -94,9 +98,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun SplashScreen() {
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(PureBlack),
+        modifier = Modifier.fillMaxSize().background(PureBlack),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -260,26 +262,19 @@ fun MainDashboardScreen() {
                 }
             }
 
-            // ACTIVE SURVEILLANCE LOCKDOWN BANNER
             if (isSurveillanceActive) {
                 item {
                     Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, ThreatCrimson, RoundedCornerShape(8.dp)),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, ThreatCrimson, RoundedCornerShape(8.dp)),
                         colors = CardDefaults.cardColors(containerColor = ElevatedSurface),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .background(ThreatCrimson, CircleShape)
+                                modifier = Modifier.size(10.dp).background(ThreatCrimson, CircleShape)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
@@ -321,9 +316,7 @@ fun MainDashboardScreen() {
             if (alarms.isEmpty()) {
                 item {
                     Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 40.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
@@ -363,13 +356,11 @@ fun MainDashboardScreen() {
                                 ).show()
                             } else {
                                 if (alarm.isEnabled) {
-                                    // TURNING OFF: Requires Master PIN, then opens 3-option menu
                                     selectedAlarmForPin = alarm
                                     pendingAction = {
                                         alarmForDeactivation = alarm
                                     }
                                 } else {
-                                    // TURNING ON: Direct toggle armed
                                     CoroutineScope(Dispatchers.IO).launch {
                                         val rearmed = alarm.copy(
                                             isEnabled = true,
@@ -716,6 +707,8 @@ fun AlarmProtocolCard(
                 ""
             }
 
+            val audioBadge = if (alarm.ringtoneUri.isNotBlank()) " • [CUSTOM SIREN]" else ""
+
             val suspensionBadge = when {
                 alarm.skipNextOnce -> " • [NEXT RUN SKIPPED]"
                 alarm.pauseUntilTimestamp > System.currentTimeMillis() -> {
@@ -737,7 +730,7 @@ fun AlarmProtocolCard(
                 )
                 Text(text = "•", color = TextMuted)
                 Text(
-                    text = "CHECK: $taperText$intervalDisplay / $durationDisplay$qrBadge$suspensionBadge",
+                    text = "CHECK: $taperText$intervalDisplay / $durationDisplay$qrBadge$audioBadge$suspensionBadge",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = if (suspensionBadge.isNotEmpty()) WarningAmber else LaserGreen
@@ -763,16 +756,43 @@ fun AddOrEditProtocolDialog(
     }
     var difficulty by remember { mutableStateOf(alarmToEdit?.missionDifficulty ?: MissionDifficulty.TWO_DIGIT) }
     var rounds by remember { mutableIntStateOf(alarmToEdit?.roundsCount ?: 5) }
-    
+
     var taperIntervalSec by remember { mutableIntStateOf(alarmToEdit?.taperIntervalSeconds ?: 300) }
     var taperDurationSec by remember { mutableIntStateOf(alarmToEdit?.taperDurationSeconds ?: 1800) }
-    
+
     var wakeIntervalSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpIntervalSeconds ?: 600) }
     var wakeDurationSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpTotalDurationSeconds ?: 7200) }
-    
+
     var qrPayload by remember { mutableStateOf(alarmToEdit?.qrPayload ?: "") }
     var qrChecksCount by remember { mutableIntStateOf(alarmToEdit?.qrChecksCount ?: 3) }
     var showQrRegistrationScanner by remember { mutableStateOf(false) }
+
+    // CUSTOM SIREN FILE
+    var customAudioPath by remember { mutableStateOf(alarmToEdit?.ringtoneUri ?: "") }
+    val audioFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val directory = File(context.filesDir, "custom_sirens").apply { if (!exists()) mkdirs() }
+                val targetFile = File(directory, "siren_${System.currentTimeMillis()}.mp3")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(targetFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                customAudioPath = targetFile.absolutePath
+                Toast.makeText(context, "CUSTOM SIREN ARMED ✓", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Toast.makeText(context, "FAILED TO LOAD AUDIO", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // PENALTY GAUNTLET OPTIONS
+    var penaltyRounds by remember { mutableIntStateOf(alarmToEdit?.penaltyRoundsCount ?: 100) }
+    var penaltyCooldownSec by remember { mutableStateOf(alarmToEdit?.penaltyCooldownSeconds ?: 43200L) }
 
     var masterPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
@@ -908,9 +928,7 @@ fun AddOrEditProtocolDialog(
                             onClick = { showQrRegistrationScanner = true },
                             colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
                             shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(1.dp, SubtleBorder, RoundedCornerShape(8.dp))
+                            modifier = Modifier.fillMaxWidth().border(1.dp, SubtleBorder, RoundedCornerShape(8.dp))
                         ) {
                             Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = LaserGreen)
                             Spacer(modifier = Modifier.width(8.dp))
@@ -955,12 +973,7 @@ fun AddOrEditProtocolDialog(
                             }
 
                             Spacer(modifier = Modifier.height(10.dp))
-                            Text(
-                                text = "MANDATORY QR SCAN CHECKS",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                color = TextMuted
-                            )
+                            Text("MANDATORY QR SCAN CHECKS", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TextMuted)
                             Spacer(modifier = Modifier.height(6.dp))
 
                             val qrOptions = listOf(
@@ -973,9 +986,7 @@ fun AddOrEditProtocolDialog(
                                 6 to "6 Checks"
                             )
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
+                                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 qrOptions.forEach { (count, label) ->
@@ -994,10 +1005,108 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 4. Math Rounds
+                // 4. CUSTOM SIREN AUDIO PICKER
+                item {
+                    Text("ALARM SIREN AUDIO SOURCE", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    if (customAudioPath.isBlank()) {
+                        Button(
+                            onClick = { audioFilePickerLauncher.launch("audio/*") },
+                            colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().border(1.dp, SubtleBorder, RoundedCornerShape(8.dp))
+                        ) {
+                            Icon(Icons.Default.Audiotrack, contentDescription = null, tint = LaserGreen)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("PICK CUSTOM SIREN (MP3/WAV)", color = LaserGreen, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(ElevatedSurface, RoundedCornerShape(8.dp))
+                                .border(1.dp, LaserGreen, RoundedCornerShape(8.dp))
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("CUSTOM AUDIO CLONED ✓", color = LaserGreen, fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(File(customAudioPath).name, color = TextSecondary, fontSize = 10.sp)
+                            }
+                            Row {
+                                TextButton(onClick = { audioFilePickerLauncher.launch("audio/*") }) {
+                                    Text("CHANGE", color = LaserGreen, fontSize = 11.sp)
+                                }
+                                IconButton(onClick = { customAudioPath = "" }) {
+                                    Icon(Icons.Default.Close, contentDescription = null, tint = ThreatCrimson)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 5. BRUTAL PENALTY GAUNTLET SETTINGS
+                item {
+                    Text("ANTI-REBOOT PENALTY CONFIG", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ThreatCrimson)
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text("PENALTY MATH ROUNDS (5-DIGIT 6-CHAIN)", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TextMuted)
+                    val roundOptions = listOf(
+                        10 to "10 (Test)",
+                        50 to "50",
+                        100 to "100 (Rec)",
+                        120 to "120"
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        roundOptions.forEach { (r, label) ->
+                            FilterChip(
+                                selected = penaltyRounds == r,
+                                onClick = { penaltyRounds = r },
+                                label = { Text(label, fontSize = 10.sp, fontFamily = FontFamily.Monospace) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ThreatCrimson,
+                                    selectedLabelColor = TextPrimary
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("MASTER PIN COOLDOWN PERIOD", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TextMuted)
+                    val cooldownOptions = listOf(
+                        300L to "5m (Test)",
+                        21600L to "6 Hours",
+                        43200L to "12 Hours (Rec)",
+                        86400L to "24 Hours (1 Day)",
+                        172800L to "48 Hours (2 Days)"
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        cooldownOptions.forEach { (sec, label) ->
+                            FilterChip(
+                                selected = penaltyCooldownSec == sec,
+                                onClick = { penaltyCooldownSec = sec },
+                                label = { Text(label, fontSize = 10.sp, fontFamily = FontFamily.Monospace) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = WarningAmber,
+                                    selectedLabelColor = PureBlack
+                                )
+                            )
+                        }
+                    }
+                }
+
+                // 6. Normal Math Rounds
                 item {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Text("MATH ROUNDS (PROBLEMS TO SOLVE)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
+                        Text("NORMAL MATH ROUNDS", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1008,9 +1117,7 @@ fun AddOrEditProtocolDialog(
                                 onClick = { if (rounds > 1) rounds-- },
                                 colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
                                 shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .border(1.dp, SubtleBorder, RoundedCornerShape(6.dp)),
+                                modifier = Modifier.size(48.dp).border(1.dp, SubtleBorder, RoundedCornerShape(6.dp)),
                                 contentPadding = PaddingValues(0.dp)
                             ) {
                                 Text("-", fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -1029,9 +1136,7 @@ fun AddOrEditProtocolDialog(
                                 onClick = { if (rounds < 50) rounds++ },
                                 colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
                                 shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .border(1.dp, SubtleBorder, RoundedCornerShape(6.dp)),
+                                modifier = Modifier.size(48.dp).border(1.dp, SubtleBorder, RoundedCornerShape(6.dp)),
                                 contentPadding = PaddingValues(0.dp)
                             ) {
                                 Text("+", fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -1040,16 +1145,13 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 5. Difficulty
+                // 7. Difficulty
                 item {
                     Text("MISSION DIFFICULTY (6-CHAIN)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
                     MissionDifficulty.entries.forEach { diff ->
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { difficulty = diff }
-                                .padding(vertical = 4.dp),
+                            modifier = Modifier.fillMaxWidth().clickable { difficulty = diff }.padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
@@ -1062,7 +1164,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 6. TAPER CHECK INTERVAL
+                // 8. Taper Interval & Durations
                 item {
                     Text(
                         text = "PHASE 1: TAPER CHECK INTERVAL",
@@ -1081,9 +1183,7 @@ fun AddOrEditProtocolDialog(
                         600 to "10m"
                     )
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         taperIntervals.forEach { (sec, label) ->
@@ -1100,16 +1200,9 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 7. TAPER PHASE DURATION
                 if (taperIntervalSec > 0) {
                     item {
-                        Text(
-                            text = "PHASE 1: TAPER DURATION",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = LaserGreen
-                        )
+                        Text("PHASE 1: TAPER DURATION", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = LaserGreen)
                         Spacer(modifier = Modifier.height(6.dp))
                         val taperDurations = listOf(
                             60 to "1m (Test)",
@@ -1119,9 +1212,7 @@ fun AddOrEditProtocolDialog(
                             1800 to "30m (Prod)"
                         )
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             taperDurations.forEach { (sec, label) ->
@@ -1139,14 +1230,9 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 8. REGULAR CHECK INTERVAL
+                // 9. Regular Checks & Total Duration
                 item {
-                    Text(
-                        text = if (taperIntervalSec > 0) "PHASE 2: REGULAR INTERVAL (AFTER TAPER)" else "REGULAR CHECK INTERVAL",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = TextMuted
-                    )
+                    Text("REGULAR CHECK INTERVAL", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
                     val intervals = listOf(
                         30 to "30s (Test)",
@@ -1158,9 +1244,7 @@ fun AddOrEditProtocolDialog(
                         1200 to "20m"
                     )
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         intervals.forEach { (sec, label) ->
@@ -1177,7 +1261,6 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 9. TOTAL DURATION
                 item {
                     Text("TOTAL SURVEILLANCE DURATION", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -1192,9 +1275,7 @@ fun AddOrEditProtocolDialog(
                         18000 to "5 Hours"
                     )
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         durations.forEach { (sec, label) ->
@@ -1274,6 +1355,7 @@ fun AddOrEditProtocolDialog(
                             minute = minute,
                             daysOfWeek = selectedDays.toList(),
                             isEnabled = alarmToEdit?.isEnabled ?: true,
+                            ringtoneUri = customAudioPath,
                             missionDifficulty = difficulty,
                             roundsCount = rounds,
                             timeoutSeconds = difficulty.defaultTimeoutSec,
@@ -1284,6 +1366,8 @@ fun AddOrEditProtocolDialog(
                             masterPinHash = pinHash,
                             qrPayload = qrPayload,
                             qrChecksCount = qrChecksCount,
+                            penaltyRoundsCount = penaltyRounds,
+                            penaltyCooldownSeconds = penaltyCooldownSec,
                             skipNextOnce = alarmToEdit?.skipNextOnce ?: false,
                             pauseUntilTimestamp = alarmToEdit?.pauseUntilTimestamp ?: 0L
                         )
@@ -1344,9 +1428,7 @@ fun DeskQrRegistrationDialog(
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(420.dp),
+            modifier = Modifier.fillMaxWidth().height(420.dp),
             colors = CardDefaults.cardColors(containerColor = PureBlack),
             shape = RoundedCornerShape(12.dp)
         ) {
@@ -1383,6 +1465,7 @@ fun DeskQrRegistrationDialog(
                                         preview,
                                         analysis
                                     )
+                                    // Automatic torch activation disabled
                                 } catch (e: Exception) {
                                     e.printStackTrace()
                                 }
@@ -1397,16 +1480,12 @@ fun DeskQrRegistrationDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Box(
-                            modifier = Modifier
-                                .size(200.dp)
-                                .border(2.dp, LaserGreen, RoundedCornerShape(12.dp))
+                            modifier = Modifier.size(200.dp).border(2.dp, LaserGreen, RoundedCornerShape(12.dp))
                         )
                     }
 
                     Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
+                        modifier = Modifier.fillMaxSize().padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -1464,9 +1543,7 @@ private fun processRegistrationImageProxy(
                     }
                 }
             }
-            .addOnCompleteListener {
-                imageProxy.close()
-            }
+            .addOnCompleteListener { imageProxy.close() }
     } else {
         imageProxy.close()
     }
