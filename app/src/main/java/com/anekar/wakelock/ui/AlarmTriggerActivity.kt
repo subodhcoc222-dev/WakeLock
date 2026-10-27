@@ -109,7 +109,7 @@ class AlarmTriggerActivity : ComponentActivity() {
 
         alarmId = incomingIntent.getLongExtra("ALARM_ID", -1L)
         isWakeUpCheck = incomingIntent.getBooleanExtra("IS_WAKEUP_CHECK", false)
-        isPunishment = incomingIntent.getBooleanExtra("IS_PUNISHMENT", false)
+        isPunishment = incomingIntent.getBooleanExtra("IS_PUNISHMENT", prefs.getBoolean("is_punishment_active", false))
 
         failedCheckIndex = incomingIntent.getIntExtra(
             "FAILED_CHECK_INDEX",
@@ -184,8 +184,8 @@ class AlarmTriggerActivity : ComponentActivity() {
         val alarm = currentAlarm
 
         if (isWakeUpCheck) {
-            val requiresQrForCheck = alarm != null && 
-                                     alarm.qrPayload.isNotBlank() && 
+            val requiresQrForCheck = alarm != null &&
+                                     alarm.qrPayload.isNotBlank() &&
                                      currentCheckNumber <= alarm.qrChecksCount
 
             if (requiresQrForCheck) {
@@ -193,29 +193,27 @@ class AlarmTriggerActivity : ComponentActivity() {
                     currentCheck = currentCheckNumber,
                     totalChecks = totalChecksNumber,
                     expectedPayload = alarm!!.qrPayload,
-                    onVerified = {
-                        confirmAwakeSuccess()
-                    },
-                    onTimeout = {
-                        triggerCheckFailurePenalty(alarm)
-                    }
+                    onVerified = { confirmAwakeSuccess() },
+                    onTimeout = { triggerCheckFailurePenalty(alarm) }
                 )
             } else {
                 WakeUpCheckScreen(
                     currentCheck = currentCheckNumber,
                     totalChecks = totalChecksNumber,
-                    onTimeout = {
-                        triggerCheckFailurePenalty(alarm)
-                    }
+                    onTimeout = { triggerCheckFailurePenalty(alarm) }
                 )
             }
-        } else if (alarm != null) {
-            AlarmWorkflowScreen(alarm)
+        } else if (alarm != null || isPunishment) {
+            val resolvedAlarm = alarm ?: AlarmEntity(
+                hour = 0,
+                minute = 0,
+                masterPinHash = "",
+                penaltyRoundsCount = 100
+            )
+            AlarmWorkflowScreen(resolvedAlarm)
         } else {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(PureBlack),
+                modifier = Modifier.fillMaxSize().background(PureBlack),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = LaserGreen)
@@ -270,9 +268,7 @@ class AlarmTriggerActivity : ComponentActivity() {
         } else if (!isQrVerified) {
             InitialAlarmQrScannerScreen(
                 expectedPayload = alarm.qrPayload,
-                onVerified = {
-                    isQrVerified = true
-                }
+                onVerified = { isQrVerified = true }
             )
         } else {
             MathGauntletScreen(alarm)
@@ -293,10 +289,7 @@ class AlarmTriggerActivity : ComponentActivity() {
         )
 
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(PureBlack)
-                .padding(24.dp),
+            modifier = Modifier.fillMaxSize().background(PureBlack).padding(24.dp),
             contentAlignment = Alignment.Center
         ) {
             Column(
@@ -330,9 +323,7 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Button(
                     onClick = onDismiss,
-                    modifier = Modifier
-                        .size(240.dp)
-                        .scale(pulseScale),
+                    modifier = Modifier.size(240.dp).scale(pulseScale),
                     shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = ThreatCrimson)
                 ) {
@@ -437,13 +428,12 @@ class AlarmTriggerActivity : ComponentActivity() {
             }
         }
 
-        var isTorchOn by remember { mutableStateOf(true) }
+        // FLASHLIGHT IS OFF BY DEFAULT (NO AUTO-TORCH)
+        var isTorchOn by remember { mutableStateOf(false) }
         var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
 
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(PureBlack)
+            modifier = Modifier.fillMaxSize().background(PureBlack)
         ) {
             if (hasCameraPermission) {
                 AndroidView(
@@ -478,7 +468,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                                     analysis
                                 )
                                 cameraControl = cam.cameraControl
-                                cam.cameraControl.enableTorch(true)
+                                // Automatic torch activation has been disabled
                             } catch (e: Exception) {
                                 e.printStackTrace()
                             }
@@ -490,9 +480,7 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 // Reticle Overlay
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
@@ -508,9 +496,7 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 // Controls & HUD
                 Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(20.dp),
+                    modifier = Modifier.fillMaxSize().padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
@@ -535,9 +521,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(8.dp))
                         LinearProgressIndicator(
                             progress = { timeLeftRatio },
-                            modifier = Modifier
-                                .fillMaxWidth(0.7f)
-                                .height(4.dp),
+                            modifier = Modifier.fillMaxWidth(0.7f).height(4.dp),
                             color = if (timeLeftRatio <= 0.25f) ThreatCrimson else LaserGreen,
                             trackColor = SubtleBorder
                         )
@@ -575,40 +559,12 @@ class AlarmTriggerActivity : ComponentActivity() {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = if (isTorchOn) "TORCH ACTIVE" else "TORCH OFF",
+                        text = if (isTorchOn) "MANUAL TORCH ON" else "TORCH OFF (TAP TO TOGGLE)",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         color = TextMuted
                     )
                     Spacer(modifier = Modifier.height(20.dp))
-                }
-            } else {
-                Column(
-                    modifier = Modifier.fillMaxSize().padding(24.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "CAMERA PERMISSION REQUIRED",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = ThreatCrimson
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Wakelock requires camera access to scan your registered Desk QR.",
-                        fontSize = 12.sp,
-                        color = TextSecondary,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(
-                        onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                        colors = ButtonDefaults.buttonColors(containerColor = LaserGreen)
-                    ) {
-                        Text("GRANT CAMERA ACCESS", color = PureBlack, fontWeight = FontWeight.Bold)
-                    }
                 }
             }
         }
@@ -633,9 +589,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                         }
                     }
                 }
-                .addOnCompleteListener {
-                    imageProxy.close()
-                }
+                .addOnCompleteListener { imageProxy.close() }
         } else {
             imageProxy.close()
         }
@@ -666,10 +620,7 @@ class AlarmTriggerActivity : ComponentActivity() {
         )
 
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(PureBlack)
-                .padding(24.dp),
+            modifier = Modifier.fillMaxSize().background(PureBlack).padding(24.dp),
             contentAlignment = Alignment.Center
         ) {
             Column(
@@ -712,9 +663,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(8.dp))
                 LinearProgressIndicator(
                     progress = { checkTimeLeft / 30f },
-                    modifier = Modifier
-                        .fillMaxWidth(0.7f)
-                        .height(4.dp),
+                    modifier = Modifier.fillMaxWidth(0.7f).height(4.dp),
                     color = if (checkTimeLeft <= 10) ThreatCrimson else LaserGreen,
                     trackColor = SubtleBorder
                 )
@@ -722,12 +671,8 @@ class AlarmTriggerActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(50.dp))
 
                 Button(
-                    onClick = {
-                        confirmAwakeSuccess()
-                    },
-                    modifier = Modifier
-                        .size(220.dp)
-                        .scale(scale),
+                    onClick = { confirmAwakeSuccess() },
+                    modifier = Modifier.size(220.dp).scale(scale),
                     shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = LaserGreen)
                 ) {
@@ -745,17 +690,21 @@ class AlarmTriggerActivity : ComponentActivity() {
 
     @Composable
     private fun MathGauntletScreen(alarm: AlarmEntity) {
-        var currentRound by remember { mutableIntStateOf(1) }
-        
-        val baseRounds = if (isPunishment) 1 else alarm.roundsCount
-        val multiplier = when {
-            isPunishment -> 1
-            failedCheckIndex > 0 -> (failedCheckIndex + 2)
-            else -> 1
-        }
-        val totalRounds = (baseRounds * multiplier).coerceAtLeast(1)
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
 
-        val difficulty = if (isPunishment) MissionDifficulty.SEVEN_DIGIT else alarm.missionDifficulty
+        val totalRounds = if (isPunishment) {
+            prefs.getInt("punishment_total_rounds", alarm.penaltyRoundsCount.coerceAtLeast(100))
+        } else {
+            val baseRounds = alarm.roundsCount
+            val multiplier = if (failedCheckIndex > 0) (failedCheckIndex + 2) else 1
+            (baseRounds * multiplier).coerceAtLeast(1)
+        }
+
+        var currentRound by remember {
+            mutableIntStateOf(if (isPunishment) prefs.getInt("punishment_current_round", 1) else 1)
+        }
+
+        val difficulty = if (isPunishment) MissionDifficulty.FIVE_DIGIT else alarm.missionDifficulty
         var problem by remember { mutableStateOf(MathMissionGenerator.generateProblem(difficulty)) }
         var userInput by remember { mutableStateOf("") }
         var feedbackMessage by remember { mutableStateOf<String?>(null) }
@@ -764,35 +713,59 @@ class AlarmTriggerActivity : ComponentActivity() {
 
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
+        val roundTimeCap = if (isPunishment) 75 else alarm.timeoutSeconds
+        var timeLeft by remember { mutableIntStateOf(roundTimeCap) }
         var activityWatchdogKey by remember { mutableIntStateOf(0) }
-        var timeLeft by remember { mutableIntStateOf(alarm.timeoutSeconds) }
         var isAlarmCurrentlyBlasting by remember { mutableStateOf(false) }
 
+        // WATCHDOG TIMER WITH HARD PROGRESS WIPEOUT ON 75s EXPIRY
         LaunchedEffect(currentRound, problem, activityWatchdogKey) {
-            timeLeft = alarm.timeoutSeconds
+            timeLeft = roundTimeCap
             while (timeLeft > 0) {
                 delay(1000L)
                 timeLeft--
             }
 
+            // TIMER HIT 0: TOTAL TIMEOUT
             isAlarmCurrentlyBlasting = true
             vibrateError(vibrator)
-            val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
-                action = AlarmForegroundService.ACTION_RESUME_TONE
-                putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm.id)
-            }
-            startService(sirenIntent)
 
-            feedbackMessage = "INACTIVITY DETECTED // ALARM ACTIVE"
-            isAnswerCorrect = false
+            if (isPunishment) {
+                // BLAST GAUNTLET SIREN & WIPE PROGRESS TO ROUND 1
+                val blastIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
+                    action = PunishmentGauntletService.ACTION_BLAST_SIREN
+                }
+                startService(blastIntent)
+
+                feedbackMessage = "75s TIMEOUT! PROGRESS WIPED TO ROUND 1 // SIREN ACTIVE"
+                currentRound = 1
+                prefs.edit().putInt("punishment_current_round", 1).apply()
+                userInput = ""
+                problem = MathMissionGenerator.generateProblem(difficulty)
+                activityWatchdogKey++
+            } else {
+                val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                    action = AlarmForegroundService.ACTION_RESUME_TONE
+                    putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm.id)
+                }
+                startService(sirenIntent)
+                feedbackMessage = "INACTIVITY DETECTED // SIREN ACTIVE"
+            }
         }
 
         fun onUserActivityInput(digit: String? = null, isBackspace: Boolean = false) {
             if (isAlarmCurrentlyBlasting) {
-                val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
-                    action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
+                if (isPunishment) {
+                    val muteIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
+                        action = PunishmentGauntletService.ACTION_MUTE_SIREN
+                    }
+                    startService(muteIntent)
+                } else {
+                    val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                        action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
+                    }
+                    startService(muteIntent)
                 }
-                startService(muteIntent)
                 isAlarmCurrentlyBlasting = false
             }
 
@@ -802,24 +775,19 @@ class AlarmTriggerActivity : ComponentActivity() {
                 if (userInput.isNotEmpty()) {
                     userInput = userInput.dropLast(1)
                 }
-            } else if (digit != null) {
-                if (userInput.length < 15) {
-                    userInput += digit
-                }
+            } else if (digit != null && userInput.length < 15) {
+                userInput += digit
             }
 
+            // Any key press resets the 75s watchdog timer back to full
             activityWatchdogKey++
         }
 
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(PureBlack)
+            modifier = Modifier.fillMaxSize().background(PureBlack)
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp),
+                modifier = Modifier.fillMaxSize().padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Row(
@@ -828,46 +796,33 @@ class AlarmTriggerActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isPunishment) "PUNISHMENT GAUNTLET" else "ROUND $currentRound OF $totalRounds",
+                        text = if (isPunishment) "BRUTAL GAUNTLET: ROUND $currentRound OF $totalRounds" else "ROUND $currentRound OF $totalRounds",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = if (isPunishment || multiplier > 1) ThreatCrimson else LaserGreen
+                        fontSize = 12.sp,
+                        color = if (isPunishment || failedCheckIndex > 0) ThreatCrimson else LaserGreen
                     )
                     Text(
                         text = "${timeLeft}s",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp,
-                        color = if (timeLeft <= 10) ThreatCrimson else TextPrimary
-                    )
-                }
-
-                if (failedCheckIndex > 0 && !isPunishment) {
-                    Text(
-                        text = "CHECK #$failedCheckIndex MISSED // ${multiplier}X PENALTY ($totalRounds ROUNDS)",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 10.sp,
-                        color = ThreatCrimson,
-                        modifier = Modifier.padding(top = 2.dp)
+                        color = if (timeLeft <= 15) ThreatCrimson else TextPrimary
                     )
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
                 LinearProgressIndicator(
-                    progress = { timeLeft.toFloat() / alarm.timeoutSeconds.toFloat() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(3.dp),
-                    color = if (isPunishment || timeLeft <= 10 || multiplier > 1) ThreatCrimson else LaserGreen,
+                    progress = { timeLeft.toFloat() / roundTimeCap.toFloat() },
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                    color = if (isPunishment || timeLeft <= 15) ThreatCrimson else LaserGreen,
                     trackColor = SubtleBorder
                 )
 
                 Text(
-                    text = if (isAlarmCurrentlyBlasting) "PRESS ANY KEY TO MUTE" else "TYPE TO MAINTAIN CALM // 30s INACTIVITY LIMIT",
+                    text = if (isAlarmCurrentlyBlasting) "PRESS ANY KEY TO MUTE" else "TYPE/BACKSPACE RESETS 75s // 0s WIPES PROGRESS TO 1",
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
+                    fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (isAlarmCurrentlyBlasting) ThreatCrimson else LaserGreen,
                     modifier = Modifier.padding(top = 6.dp)
@@ -880,8 +835,9 @@ class AlarmTriggerActivity : ComponentActivity() {
                         text = feedbackMessage!!,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
+                        fontSize = 12.sp,
                         color = if (isAnswerCorrect) LaserGreen else ThreatCrimson,
+                        textAlign = TextAlign.Center,
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
                 }
@@ -898,16 +854,14 @@ class AlarmTriggerActivity : ComponentActivity() {
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
                         horizontalAlignment = Alignment.End
                     ) {
                         problem.terms.forEachIndexed { index, num ->
                             Text(
                                 text = if (index == 0) "  $num" else "+ $num",
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 18.sp,
+                                fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = TextPrimary,
                                 textAlign = TextAlign.End
@@ -940,16 +894,27 @@ class AlarmTriggerActivity : ComponentActivity() {
                             feedbackMessage = "CORRECT ANSWER ✓"
                             isAnswerCorrect = true
                             if (isAlarmCurrentlyBlasting) {
-                                val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
-                                    action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
+                                if (isPunishment) {
+                                    val muteIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
+                                        action = PunishmentGauntletService.ACTION_MUTE_SIREN
+                                    }
+                                    startService(muteIntent)
+                                } else {
+                                    val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+                                        action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
+                                    }
+                                    startService(muteIntent)
                                 }
-                                startService(muteIntent)
                                 isAlarmCurrentlyBlasting = false
                             }
+
                             CoroutineScope(Dispatchers.Main).launch {
-                                delay(350)
+                                delay(300)
                                 if (currentRound < totalRounds) {
                                     currentRound++
+                                    if (isPunishment) {
+                                        prefs.edit().putInt("punishment_current_round", currentRound).apply()
+                                    }
                                     problem = MathMissionGenerator.generateProblem(difficulty)
                                     userInput = ""
                                     feedbackMessage = null
@@ -963,7 +928,7 @@ class AlarmTriggerActivity : ComponentActivity() {
                             feedbackMessage = "WRONG! TRY AGAIN"
                             isAnswerCorrect = false
                             userInput = ""
-                            activityWatchdogKey++
+                            activityWatchdogKey++ // Resets 75s so user can re-calculate peacefully
                         }
                     }
                 )
@@ -980,17 +945,21 @@ class AlarmTriggerActivity : ComponentActivity() {
             }
 
             if (showPinDialog) {
+                val cooldownEndTime = prefs.getLong("punishment_cooldown_end_time", 0L)
+                val isCooldownActive = isPunishment && (System.currentTimeMillis() < cooldownEndTime)
+
                 MasterPinVerificationDialog(
                     correctHash = alarm.masterPinHash,
+                    isCooldownActive = isCooldownActive,
+                    cooldownRemainingMillis = (cooldownEndTime - System.currentTimeMillis()).coerceAtLeast(0L),
                     onDismiss = { showPinDialog = false },
                     onSuccess = {
                         isLockdownActive = false
-                        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
                         prefs.edit()
                             .putBoolean("is_lockdown_active", false)
+                            .putBoolean("is_punishment_active", false)
                             .putInt("failed_check_index", 0)
                             .apply()
-                        failedCheckIndex = 0
 
                         if (isPunishment) {
                             val serviceIntent = Intent(this@AlarmTriggerActivity, PunishmentGauntletService::class.java).apply {
@@ -1020,7 +989,7 @@ class AlarmTriggerActivity : ComponentActivity() {
 
         if (isPunishment) {
             val serviceIntent = Intent(this, PunishmentGauntletService::class.java).apply {
-                action = PunishmentGauntletService.ACTION_SOLVED_ROUND
+                action = PunishmentGauntletService.ACTION_COMPLETE_GAUNTLET
             }
             startService(serviceIntent)
             finish()
@@ -1031,7 +1000,6 @@ class AlarmTriggerActivity : ComponentActivity() {
             startService(stopAlarmIntent)
 
             if (wasPenalty) {
-                // RESUME ACTION prevents anti-hijack reject and restores check timers
                 val resumeIntent = Intent(this, WakeUpSurveillanceService::class.java).apply {
                     action = WakeUpSurveillanceService.ACTION_RESUME_FROM_PENALTY
                     putExtra(WakeUpSurveillanceService.EXTRA_ALARM_ID, alarm.id)
@@ -1126,18 +1094,23 @@ fun NumericKeypad(
 @Composable
 fun MasterPinVerificationDialog(
     correctHash: String,
+    isCooldownActive: Boolean = false,
+    cooldownRemainingMillis: Long = 0L,
     onDismiss: () -> Unit,
     onSuccess: () -> Unit
 ) {
     var enteredPin by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
 
+    val remainingHours = cooldownRemainingMillis / (1000 * 60 * 60)
+    val remainingMinutes = (cooldownRemainingMillis / (1000 * 60)) % 60
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = DarkSurface,
         title = {
             Text(
-                text = "ENTER MASTER PIN",
+                text = if (isCooldownActive) "PIN OVERRIDE LOCKED" else "ENTER MASTER PIN",
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp,
@@ -1146,46 +1119,57 @@ fun MasterPinVerificationDialog(
         },
         text = {
             Column {
-                Text(
-                    text = "Authorization required to override protocol.",
-                    fontSize = 12.sp,
-                    color = TextSecondary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = enteredPin,
-                    onValueChange = { if (it.length <= 8) enteredPin = it },
-                    singleLine = true,
-                    isError = isError,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = LaserGreen,
-                        unfocusedBorderColor = SubtleBorder,
-                        focusedTextColor = TextPrimary
-                    )
-                )
-                if (isError) {
+                if (isCooldownActive) {
                     Text(
-                        text = "INVALID PIN // ACCESS DENIED",
+                        text = "PENALTY COOLDOWN ACTIVE // BYPASS RESTRICTED\nMaster PIN disabled for another ${remainingHours}h ${remainingMinutes}m.\nPowering off phone will reset countdown to zero.",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = ThreatCrimson,
-                        modifier = Modifier.padding(top = 4.dp)
+                        color = ThreatCrimson
                     )
+                } else {
+                    Text(
+                        text = "Authorization required to override protocol.",
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = enteredPin,
+                        onValueChange = { if (it.length <= 8) enteredPin = it },
+                        singleLine = true,
+                        isError = isError,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = LaserGreen,
+                            unfocusedBorderColor = SubtleBorder,
+                            focusedTextColor = TextPrimary
+                        )
+                    )
+                    if (isError) {
+                        Text(
+                            text = "INVALID PIN // ACCESS DENIED",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            color = ThreatCrimson,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
-                    if (WakelockSecurity.verifyPin(enteredPin, correctHash)) {
-                        onSuccess()
-                    } else {
-                        isError = true
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = LaserGreen)
-            ) {
-                Text("VERIFY", color = PureBlack, fontWeight = FontWeight.Bold)
+            if (!isCooldownActive) {
+                Button(
+                    onClick = {
+                        if (WakelockSecurity.verifyPin(enteredPin, correctHash)) {
+                            onSuccess()
+                        } else {
+                            isError = true
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = LaserGreen)
+                ) {
+                    Text("VERIFY", color = PureBlack, fontWeight = FontWeight.Bold)
+                }
             }
         },
         dismissButton = {
