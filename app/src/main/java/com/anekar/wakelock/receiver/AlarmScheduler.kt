@@ -12,7 +12,21 @@ import java.util.Calendar
 object AlarmScheduler {
 
     fun scheduleAlarm(context: Context, alarm: AlarmEntity) {
+        if (!alarm.isEnabled) {
+            cancelAlarm(context, alarm.id)
+            return
+        }
+
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        // Android 12+ (API 31+) Exact Alarm Check
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (!alarmManager.canScheduleExactAlarms()) {
+                return
+            }
+        }
+
+        val triggerTime = calculateNextTriggerTime(alarm)
 
         val intent = Intent(context, AlarmReceiver::class.java).apply {
             putExtra("ALARM_ID", alarm.id)
@@ -25,9 +39,8 @@ object AlarmScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val showIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
+        // Show Intent for Alarm Clock Info (Required by setAlarmClock)
+        val showIntent = Intent(context, MainActivity::class.java)
         val showPendingIntent = PendingIntent.getActivity(
             context,
             alarm.id.toInt(),
@@ -35,14 +48,8 @@ object AlarmScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val targetCalendar = calculateNextTriggerTime(alarm)
-
-        val alarmClockInfo = AlarmManager.AlarmClockInfo(
-            targetCalendar.timeInMillis,
-            showPendingIntent
-        )
-
-        // setAlarmClock Samsung/Doze Recents-swipe restrictions ko 100% bypass karta hai
+        // setAlarmClock BYPASSES Samsung Low-Battery & Doze restrictions completely
+        val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTime, showPendingIntent)
         alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
     }
 
@@ -58,8 +65,7 @@ object AlarmScheduler {
         alarmManager.cancel(pendingIntent)
     }
 
-    private fun calculateNextTriggerTime(alarm: AlarmEntity): Calendar {
-        val now = Calendar.getInstance()
+    private fun calculateNextTriggerTime(alarm: AlarmEntity): Long {
         val calendar = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, alarm.hour)
             set(Calendar.MINUTE, alarm.minute)
@@ -67,30 +73,21 @@ object AlarmScheduler {
             set(Calendar.MILLISECOND, 0)
         }
 
-        if (calendar.timeInMillis <= now.timeInMillis) {
+        val now = System.currentTimeMillis()
+
+        if (alarm.daysOfWeek.isEmpty()) {
+            // One-time or everyday alarm
+            if (calendar.timeInMillis <= now) {
+                calendar.add(Calendar.DAY_OF_YEAR, 1)
+            }
+            return calendar.timeInMillis
+        }
+
+        // Repeating on specific days of week (1 = Sunday, 2 = Monday ... 7 = Saturday)
+        while (calendar.timeInMillis <= now || !alarm.daysOfWeek.contains(calendar.get(Calendar.DAY_OF_WEEK))) {
             calendar.add(Calendar.DAY_OF_YEAR, 1)
         }
 
-        if (alarm.daysOfWeek.isNotEmpty() && alarm.daysOfWeek.size < 7) {
-            while (!isDaySelected(calendar.get(Calendar.DAY_OF_WEEK), alarm.daysOfWeek)) {
-                calendar.add(Calendar.DAY_OF_YEAR, 1)
-            }
-        }
-
-        return calendar
-    }
-
-    private fun isDaySelected(calendarDayOfWeek: Int, selectedDays: List<Int>): Boolean {
-        val uiDay = when (calendarDayOfWeek) {
-            Calendar.MONDAY -> 1
-            Calendar.TUESDAY -> 2
-            Calendar.WEDNESDAY -> 3
-            Calendar.THURSDAY -> 4
-            Calendar.FRIDAY -> 5
-            Calendar.SATURDAY -> 6
-            Calendar.SUNDAY -> 7
-            else -> 1
-        }
-        return selectedDays.contains(uiDay)
+        return calendar.timeInMillis
     }
 }
