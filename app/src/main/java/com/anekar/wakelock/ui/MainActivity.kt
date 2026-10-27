@@ -1,6 +1,7 @@
 package com.anekar.wakelock.ui
 
 import android.Manifest
+import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Context
 import android.content.pm.PackageManager
@@ -61,8 +62,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
 import java.util.concurrent.Executors
-import kotlin.OptIn
 
 class MainActivity : ComponentActivity() {
 
@@ -150,6 +153,7 @@ fun MainDashboardScreen() {
     var editingAlarm by remember { mutableStateOf<AlarmEntity?>(null) }
     var selectedAlarmForPin by remember { mutableStateOf<AlarmEntity?>(null) }
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var alarmForDeactivation by remember { mutableStateOf<AlarmEntity?>(null) }
 
     fun refreshAlarms() {
         CoroutineScope(Dispatchers.IO).launch {
@@ -358,16 +362,22 @@ fun MainDashboardScreen() {
                                     Toast.LENGTH_SHORT
                                 ).show()
                             } else {
-                                selectedAlarmForPin = alarm
-                                pendingAction = {
-                                    val updatedState = !alarm.isEnabled
+                                if (alarm.isEnabled) {
+                                    // TURNING OFF: Requires Master PIN, then opens 3-option menu
+                                    selectedAlarmForPin = alarm
+                                    pendingAction = {
+                                        alarmForDeactivation = alarm
+                                    }
+                                } else {
+                                    // TURNING ON: Direct toggle armed
                                     CoroutineScope(Dispatchers.IO).launch {
-                                        db.alarmDao().updateAlarmState(alarm.id, updatedState)
-                                        if (updatedState) {
-                                            AlarmScheduler.scheduleAlarm(context, alarm.copy(isEnabled = true))
-                                        } else {
-                                            AlarmScheduler.cancelAlarm(context, alarm.id)
-                                        }
+                                        val rearmed = alarm.copy(
+                                            isEnabled = true,
+                                            skipNextOnce = false,
+                                            pauseUntilTimestamp = 0L
+                                        )
+                                        db.alarmDao().updateAlarm(rearmed)
+                                        AlarmScheduler.scheduleAlarm(context, rearmed)
                                         refreshAlarms()
                                     }
                                 }
@@ -411,6 +421,42 @@ fun MainDashboardScreen() {
             )
         }
 
+        alarmForDeactivation?.let { targetAlarm ->
+            ProtocolDeactivationOptionsDialog(
+                alarm = targetAlarm,
+                onDismiss = { alarmForDeactivation = null },
+                onSkipOnce = {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val updated = targetAlarm.copy(skipNextOnce = true)
+                        db.alarmDao().updateAlarm(updated)
+                        refreshAlarms()
+                        withContext(Dispatchers.Main) { alarmForDeactivation = null }
+                    }
+                },
+                onPauseTillDate = { pauseTimestamp ->
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val updated = targetAlarm.copy(pauseUntilTimestamp = pauseTimestamp)
+                        db.alarmDao().updateAlarm(updated)
+                        refreshAlarms()
+                        withContext(Dispatchers.Main) { alarmForDeactivation = null }
+                    }
+                },
+                onTurnOffIndefinite = {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val updated = targetAlarm.copy(
+                            isEnabled = false,
+                            skipNextOnce = false,
+                            pauseUntilTimestamp = 0L
+                        )
+                        db.alarmDao().updateAlarm(updated)
+                        AlarmScheduler.cancelAlarm(context, targetAlarm.id)
+                        refreshAlarms()
+                        withContext(Dispatchers.Main) { alarmForDeactivation = null }
+                    }
+                }
+            )
+        }
+
         if (showConfigDialog) {
             AddOrEditProtocolDialog(
                 alarmToEdit = editingAlarm,
@@ -439,6 +485,141 @@ fun MainDashboardScreen() {
             )
         }
     }
+}
+
+@Composable
+fun ProtocolDeactivationOptionsDialog(
+    alarm: AlarmEntity,
+    onDismiss: () -> Unit,
+    onSkipOnce: () -> Unit,
+    onPauseTillDate: (Long) -> Unit,
+    onTurnOffIndefinite: () -> Unit
+) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DarkSurface,
+        title = {
+            Text(
+                text = "PROTOCOL OVERRIDE CONTROLS",
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = LaserGreen
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Select suspension mode for this protocol:",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = TextSecondary
+                )
+
+                // OPTION 1: SKIP NEXT CYCLE
+                Button(
+                    onClick = onSkipOnce,
+                    colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, SubtleBorder, RoundedCornerShape(6.dp))
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Text(
+                            text = "1. SKIP NEXT CYCLE (1-TIME)",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "Skips only the upcoming alarm run. Re-arms automatically afterwards.",
+                            fontSize = 10.sp,
+                            color = TextMuted
+                        )
+                    }
+                }
+
+                // OPTION 2: PAUSE UNTIL SPECIFIC DATE
+                Button(
+                    onClick = {
+                        val calendar = Calendar.getInstance()
+                        DatePickerDialog(
+                            context,
+                            { _, year, month, day ->
+                                TimePickerDialog(
+                                    context,
+                                    { _, hour, minute ->
+                                        val targetCal = Calendar.getInstance().apply {
+                                            set(year, month, day, hour, minute, 0)
+                                        }
+                                        onPauseTillDate(targetCal.timeInMillis)
+                                    },
+                                    calendar.get(Calendar.HOUR_OF_DAY),
+                                    calendar.get(Calendar.MINUTE),
+                                    false
+                                ).show()
+                            },
+                            calendar.get(Calendar.YEAR),
+                            calendar.get(Calendar.MONTH),
+                            calendar.get(Calendar.DAY_OF_MONTH)
+                        ).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, SubtleBorder, RoundedCornerShape(6.dp))
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Text(
+                            text = "2. PAUSE UNTIL SPECIFIC DATE",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = WarningAmber
+                        )
+                        Text(
+                            text = "Suspends alarms until your designated date/time, then auto-resumes.",
+                            fontSize = 10.sp,
+                            color = TextMuted
+                        )
+                    }
+                }
+
+                // OPTION 3: TURN OFF INDEFINITELY
+                Button(
+                    onClick = onTurnOffIndefinite,
+                    colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, ThreatCrimson, RoundedCornerShape(6.dp))
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Text(
+                            text = "3. DEACTIVATE INDEFINITELY",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = ThreatCrimson
+                        )
+                        Text(
+                            text = "Completely disables protocol until manually re-enabled.",
+                            fontSize = 10.sp,
+                            color = TextMuted
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("CANCEL", color = TextSecondary, fontFamily = FontFamily.Monospace)
+            }
+        }
+    )
 }
 
 @Composable
@@ -535,6 +716,15 @@ fun AlarmProtocolCard(
                 ""
             }
 
+            val suspensionBadge = when {
+                alarm.skipNextOnce -> " • [NEXT RUN SKIPPED]"
+                alarm.pauseUntilTimestamp > System.currentTimeMillis() -> {
+                    val sdf = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault())
+                    " • [PAUSED TILL ${sdf.format(alarm.pauseUntilTimestamp)}]"
+                }
+                else -> ""
+            }
+
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -547,10 +737,10 @@ fun AlarmProtocolCard(
                 )
                 Text(text = "•", color = TextMuted)
                 Text(
-                    text = "CHECK: $taperText$intervalDisplay / $durationDisplay$qrBadge",
+                    text = "CHECK: $taperText$intervalDisplay / $durationDisplay$qrBadge$suspensionBadge",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = LaserGreen
+                    color = if (suspensionBadge.isNotEmpty()) WarningAmber else LaserGreen
                 )
             }
         }
@@ -574,15 +764,12 @@ fun AddOrEditProtocolDialog(
     var difficulty by remember { mutableStateOf(alarmToEdit?.missionDifficulty ?: MissionDifficulty.TWO_DIGIT) }
     var rounds by remember { mutableIntStateOf(alarmToEdit?.roundsCount ?: 5) }
     
-    // Taper Phase Settings
     var taperIntervalSec by remember { mutableIntStateOf(alarmToEdit?.taperIntervalSeconds ?: 300) }
     var taperDurationSec by remember { mutableIntStateOf(alarmToEdit?.taperDurationSeconds ?: 1800) }
     
-    // Regular Phase Settings
     var wakeIntervalSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpIntervalSeconds ?: 600) }
     var wakeDurationSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpTotalDurationSeconds ?: 7200) }
     
-    // QR Physical Anchor Settings
     var qrPayload by remember { mutableStateOf(alarmToEdit?.qrPayload ?: "") }
     var qrChecksCount by remember { mutableIntStateOf(alarmToEdit?.qrChecksCount ?: 3) }
     var showQrRegistrationScanner by remember { mutableStateOf(false) }
@@ -705,7 +892,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 3. PHYSICAL DESK QR ANCHOR REGISTRATION
+                // 3. PHYSICAL DESK QR ANCHOR
                 item {
                     Text(
                         text = "PHYSICAL DESK QR ANCHOR",
@@ -807,7 +994,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 4. Math Rounds UI
+                // 4. Math Rounds
                 item {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Text("MATH ROUNDS (PROBLEMS TO SOLVE)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
@@ -853,7 +1040,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 5. Mission Difficulty
+                // 5. Difficulty
                 item {
                     Text("MISSION DIFFICULTY (6-CHAIN)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -875,7 +1062,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 6. TAPER CHECK INTERVAL (PHASE 1)
+                // 6. TAPER CHECK INTERVAL
                 item {
                     Text(
                         text = "PHASE 1: TAPER CHECK INTERVAL",
@@ -935,8 +1122,8 @@ fun AddOrEditProtocolDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             taperDurations.forEach { (sec, label) ->
                                 FilterChip(
                                     selected = taperDurationSec == sec,
@@ -949,18 +1136,10 @@ fun AddOrEditProtocolDialog(
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        val checksInPhase1 = if (taperIntervalSec > 0) taperDurationSec / taperIntervalSec else 0
-                        Text(
-                            text = "⚡ Phase 1 executes $checksInPhase1 checks (every ${if (taperIntervalSec < 60) "${taperIntervalSec}s" else "${taperIntervalSec/60}m"}) before shifting.",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = LaserGreen
-                        )
                     }
                 }
 
-                // 8. REGULAR CHECK INTERVAL (PHASE 2)
+                // 8. REGULAR CHECK INTERVAL
                 item {
                     Text(
                         text = if (taperIntervalSec > 0) "PHASE 2: REGULAR INTERVAL (AFTER TAPER)" else "REGULAR CHECK INTERVAL",
@@ -998,7 +1177,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 9. SURVEILLANCE DURATION (TOTAL)
+                // 9. TOTAL DURATION
                 item {
                     Text("TOTAL SURVEILLANCE DURATION", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -1032,7 +1211,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 10. Master PIN Setup
+                // 10. Master PIN
                 item {
                     Text(
                         if (alarmToEdit != null) "UPDATE MASTER PIN (OR LEAVE BLANK TO KEEP)" else "SET MASTER PIN (4-8 DIGITS)",
@@ -1104,7 +1283,9 @@ fun AddOrEditProtocolDialog(
                             wakeUpTotalDurationSeconds = wakeDurationSec,
                             masterPinHash = pinHash,
                             qrPayload = qrPayload,
-                            qrChecksCount = qrChecksCount
+                            qrChecksCount = qrChecksCount,
+                            skipNextOnce = alarmToEdit?.skipNextOnce ?: false,
+                            pauseUntilTimestamp = alarmToEdit?.pauseUntilTimestamp ?: 0L
                         )
                         onSave(updatedAlarm)
                     }
@@ -1211,7 +1392,6 @@ fun DeskQrRegistrationDialog(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Reticle Box
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
