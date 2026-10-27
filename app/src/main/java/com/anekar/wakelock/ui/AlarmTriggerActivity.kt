@@ -1,6 +1,7 @@
 package com.anekar.wakelock.ui
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -77,6 +78,8 @@ class AlarmTriggerActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            km.requestDismissKeyguard(this, null)
         }
         window.addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
@@ -1007,6 +1010,8 @@ class AlarmTriggerActivity : ComponentActivity() {
     private fun onGauntletCompleted(alarm: AlarmEntity) {
         isLockdownActive = false
         val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+        val wasPenalty = failedCheckIndex > 0
+
         prefs.edit()
             .putBoolean("is_lockdown_active", false)
             .putInt("failed_check_index", 0)
@@ -1025,7 +1030,14 @@ class AlarmTriggerActivity : ComponentActivity() {
             }
             startService(stopAlarmIntent)
 
-            if (alarm.wakeUpTotalDurationSeconds > 0) {
+            if (wasPenalty) {
+                // RESUME ACTION prevents anti-hijack reject and restores check timers
+                val resumeIntent = Intent(this, WakeUpSurveillanceService::class.java).apply {
+                    action = WakeUpSurveillanceService.ACTION_RESUME_FROM_PENALTY
+                    putExtra(WakeUpSurveillanceService.EXTRA_ALARM_ID, alarm.id)
+                }
+                startService(resumeIntent)
+            } else if (alarm.wakeUpTotalDurationSeconds > 0) {
                 val surveillanceIntent = Intent(this, WakeUpSurveillanceService::class.java).apply {
                     action = WakeUpSurveillanceService.ACTION_START_SURVEILLANCE
                     putExtra(WakeUpSurveillanceService.EXTRA_ALARM_ID, alarm.id)
