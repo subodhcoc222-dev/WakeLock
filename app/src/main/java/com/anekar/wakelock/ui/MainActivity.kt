@@ -1,11 +1,19 @@
 package com.anekar.wakelock.ui
 
+import android.Manifest
 import android.app.TimePickerDialog
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.OptIn
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,7 +27,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +41,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.anekar.wakelock.data.database.WakelockDatabase
@@ -41,11 +54,16 @@ import com.anekar.wakelock.receiver.AlarmScheduler
 import com.anekar.wakelock.ui.components.PermissionAuditCards
 import com.anekar.wakelock.ui.components.checkPermissions
 import com.anekar.wakelock.ui.theme.*
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
 
@@ -511,6 +529,13 @@ fun AlarmProtocolCard(
                 else -> "${alarm.wakeUpTotalDurationSeconds / 3600}h"
             }
 
+            val qrBadge = if (alarm.qrPayload.isNotBlank()) {
+                val countText = if (alarm.qrChecksCount > 0) "QR: 1st ${alarm.qrChecksCount} checks" else "QR: Alarm only"
+                " • [$countText]"
+            } else {
+                ""
+            }
+
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -523,7 +548,7 @@ fun AlarmProtocolCard(
                 )
                 Text(text = "•", color = TextMuted)
                 Text(
-                    text = "CHECK: $taperText$intervalDisplay / $durationDisplay",
+                    text = "CHECK: $taperText$intervalDisplay / $durationDisplay$qrBadge",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = LaserGreen
@@ -558,6 +583,11 @@ fun AddOrEditProtocolDialog(
     var wakeIntervalSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpIntervalSeconds ?: 600) }
     var wakeDurationSec by remember { mutableIntStateOf(alarmToEdit?.wakeUpTotalDurationSeconds ?: 7200) }
     
+    // QR Physical Anchor Settings
+    var qrPayload by remember { mutableStateOf(alarmToEdit?.qrPayload ?: "") }
+    var qrChecksCount by remember { mutableIntStateOf(alarmToEdit?.qrChecksCount ?: 3) }
+    var showQrRegistrationScanner by remember { mutableStateOf(false) }
+
     var masterPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
@@ -676,7 +706,109 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 3. Math Rounds UI
+                // 3. PHYSICAL DESK QR ANCHOR REGISTRATION
+                item {
+                    Text(
+                        text = "PHYSICAL DESK QR ANCHOR",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (qrPayload.isNotBlank()) LaserGreen else TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    if (qrPayload.isBlank()) {
+                        Button(
+                            onClick = { showQrRegistrationScanner = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, SubtleBorder, RoundedCornerShape(8.dp))
+                        ) {
+                            Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = LaserGreen)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("SCAN & REGISTER DESK QR", color = LaserGreen, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(ElevatedSurface, RoundedCornerShape(8.dp))
+                                .border(1.dp, LaserGreen, RoundedCornerShape(8.dp))
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "TARGET ANCHOR LINKED ✓",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        color = LaserGreen
+                                    )
+                                    Text(
+                                        text = if (qrPayload.length > 25) qrPayload.take(22) + "..." else qrPayload,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+                                Row {
+                                    TextButton(onClick = { showQrRegistrationScanner = true }) {
+                                        Text("RE-SCAN", color = LaserGreen, fontSize = 11.sp)
+                                    }
+                                    IconButton(onClick = { qrPayload = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear QR", tint = ThreatCrimson)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "MANDATORY QR SCAN CHECKS",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = TextMuted
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            val qrOptions = listOf(
+                                0 to "0 (Alarm Only)",
+                                1 to "1 Check",
+                                2 to "2 Checks",
+                                3 to "3 Checks (Rec)",
+                                4 to "4 Checks",
+                                5 to "5 Checks",
+                                6 to "6 Checks"
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                qrOptions.forEach { (count, label) ->
+                                    FilterChip(
+                                        selected = qrChecksCount == count,
+                                        onClick = { qrChecksCount = count },
+                                        label = { Text(label, fontSize = 10.sp, fontFamily = FontFamily.Monospace) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = LaserGreen,
+                                            selectedLabelColor = PureBlack
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 4. Math Rounds UI
                 item {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Text("MATH ROUNDS (PROBLEMS TO SOLVE)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
@@ -722,7 +854,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 4. Mission Difficulty
+                // 5. Mission Difficulty
                 item {
                     Text("MISSION DIFFICULTY (6-CHAIN)", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -744,7 +876,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 5. TAPER CHECK INTERVAL (PHASE 1)
+                // 6. TAPER CHECK INTERVAL (PHASE 1)
                 item {
                     Text(
                         text = "PHASE 1: TAPER CHECK INTERVAL",
@@ -782,7 +914,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 6. TAPER PHASE DURATION (Visible only if Taper != OFF)
+                // 7. TAPER PHASE DURATION (Visible only if Taper != OFF)
                 if (taperIntervalSec > 0) {
                     item {
                         Text(
@@ -829,7 +961,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 7. REGULAR CHECK INTERVAL (PHASE 2)
+                // 8. REGULAR CHECK INTERVAL (PHASE 2)
                 item {
                     Text(
                         text = if (taperIntervalSec > 0) "PHASE 2: REGULAR INTERVAL (AFTER TAPER)" else "REGULAR CHECK INTERVAL",
@@ -867,7 +999,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 8. SURVEILLANCE DURATION (TOTAL)
+                // 9. SURVEILLANCE DURATION (TOTAL)
                 item {
                     Text("TOTAL SURVEILLANCE DURATION", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -901,7 +1033,7 @@ fun AddOrEditProtocolDialog(
                     }
                 }
 
-                // 9. Master PIN Setup
+                // 10. Master PIN Setup
                 item {
                     Text(
                         if (alarmToEdit != null) "UPDATE MASTER PIN (OR LEAVE BLANK TO KEEP)" else "SET MASTER PIN (4-8 DIGITS)",
@@ -971,7 +1103,9 @@ fun AddOrEditProtocolDialog(
                             taperDurationSeconds = taperDurationSec,
                             wakeUpIntervalSeconds = wakeIntervalSec,
                             wakeUpTotalDurationSeconds = wakeDurationSec,
-                            masterPinHash = pinHash
+                            masterPinHash = pinHash,
+                            qrPayload = qrPayload,
+                            qrChecksCount = qrChecksCount
                         )
                         onSave(updatedAlarm)
                     }
@@ -991,4 +1125,161 @@ fun AddOrEditProtocolDialog(
             }
         }
     )
+
+    if (showQrRegistrationScanner) {
+        DeskQrRegistrationDialog(
+            onDismiss = { showQrRegistrationScanner = false },
+            onScanned = { payload ->
+                qrPayload = payload
+                showQrRegistrationScanner = false
+            }
+        )
+    }
+}
+
+@Composable
+fun DeskQrRegistrationDialog(
+    onDismiss: () -> Unit,
+    onScanned: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasCameraPermission = granted
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(420.dp),
+            colors = CardDefaults.cardColors(containerColor = PureBlack),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (hasCameraPermission) {
+                    AndroidView(
+                        factory = { ctx ->
+                            val previewView = PreviewView(ctx)
+                            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                            cameraProviderFuture.addListener({
+                                val cameraProvider = cameraProviderFuture.get()
+                                val preview = Preview.Builder().build().also {
+                                    it.setSurfaceProvider(previewView.surfaceProvider)
+                                }
+
+                                val options = BarcodeScannerOptions.Builder()
+                                    .setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
+                                    .build()
+                                val scanner = BarcodeScanning.getClient(options)
+
+                                val analysis = ImageAnalysis.Builder()
+                                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                    .build()
+
+                                analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
+                                    val mediaImage = imageProxy.image
+                                    if (mediaImage != null) {
+                                        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                                        scanner.process(image)
+                                            .addOnSuccessListener { barcodes ->
+                                                for (barcode in barcodes) {
+                                                    val raw = barcode.rawValue
+                                                    if (!raw.isNullOrBlank()) {
+                                                        onScanned(raw)
+                                                        break
+                                                    }
+                                                }
+                                            }
+                                            .addOnCompleteListener {
+                                                imageProxy.close()
+                                            }
+                                    } else {
+                                        imageProxy.close()
+                                    }
+                                }
+
+                                try {
+                                    cameraProvider.unbindAll()
+                                    cameraProvider.bindToLifecycle(
+                                        lifecycleOwner,
+                                        CameraSelector.DEFAULT_BACK_CAMERA,
+                                        preview,
+                                        analysis
+                                    )
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                            }, ContextCompat.getMainExecutor(ctx))
+                            previewView
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Reticle Box
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(200.dp)
+                                .border(2.dp, LaserGreen, RoundedCornerShape(12.dp))
+                        )
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "POINT CAMERA AT DESK QR",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = LaserGreen
+                        )
+                        Button(
+                            onClick = onDismiss,
+                            colors = ButtonDefaults.buttonColors(containerColor = ElevatedSurface)
+                        ) {
+                            Text("CANCEL", color = TextPrimary, fontSize = 11.sp)
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(20.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("CAMERA ACCESS REQUIRED", color = ThreatCrimson, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                            colors = ButtonDefaults.buttonColors(containerColor = LaserGreen)
+                        ) {
+                            Text("GRANT PERMISSION", color = PureBlack)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
