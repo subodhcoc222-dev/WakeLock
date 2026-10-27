@@ -30,6 +30,10 @@ data class AlarmEntity(
     val wakeUpTotalDurationSeconds: Int = 7200, // Total surveillance duration
     val masterPinHash: String, // SHA-256 hashed PIN
     
+    // QR Code Integration (Physical Desk Anchor)
+    val qrPayload: String = "", // Empty = Normal Mode (No QR); Non-empty = Required Desk QR
+    val qrChecksCount: Int = 0, // 0 = Only Initial Alarm; 1..6 = First N taper checks require QR
+
     // Active Surveillance & Anti-Tamper States
     val isSurveillanceActive: Boolean = false,
     val surveillanceStartTime: Long = 0L,
