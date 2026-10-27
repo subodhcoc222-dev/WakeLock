@@ -11,7 +11,7 @@ import com.anekar.wakelock.data.model.Converters
 
 @Database(
     entities = [AlarmEntity::class],
-    version = 4, // Bumped to version 4 for QR Payload and QR Checks Count
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
