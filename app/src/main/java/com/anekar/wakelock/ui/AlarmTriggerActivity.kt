@@ -1,14 +1,22 @@
 package com.anekar.wakelock.ui
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.OptIn
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -16,16 +24,24 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import com.anekar.wakelock.data.database.WakelockDatabase
 import com.anekar.wakelock.data.model.AlarmEntity
 import com.anekar.wakelock.data.model.MissionDifficulty
@@ -35,11 +51,16 @@ import com.anekar.wakelock.service.AlarmForegroundService
 import com.anekar.wakelock.service.PunishmentGauntletService
 import com.anekar.wakelock.service.WakeUpSurveillanceService
 import com.anekar.wakelock.ui.theme.*
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 
 class AlarmTriggerActivity : ComponentActivity() {
 
@@ -162,23 +183,31 @@ class AlarmTriggerActivity : ComponentActivity() {
         val alarm = currentAlarm
 
         if (isWakeUpCheck) {
-            WakeUpCheckScreen(
-                currentCheck = currentCheckNumber,
-                totalChecks = totalChecksNumber,
-                onTimeout = {
-                    isWakeUpCheck = false
-                    failedCheckIndex = currentCheckNumber.coerceAtLeast(1)
-                    val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-                    prefs.edit().putInt("failed_check_index", failedCheckIndex).apply()
+            val requiresQrForCheck = alarm != null && 
+                                     alarm.qrPayload.isNotBlank() && 
+                                     currentCheckNumber <= alarm.qrChecksCount
 
-                    val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
-                        action = AlarmForegroundService.ACTION_START_ALARM
-                        putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm?.id ?: alarmId)
-                        putExtra("FAILED_CHECK_INDEX", failedCheckIndex)
+            if (requiresQrForCheck) {
+                WakeUpQrScannerScreen(
+                    currentCheck = currentCheckNumber,
+                    totalChecks = totalChecksNumber,
+                    expectedPayload = alarm!!.qrPayload,
+                    onVerified = {
+                        confirmAwakeSuccess()
+                    },
+                    onTimeout = {
+                        triggerCheckFailurePenalty(alarm)
                     }
-                    startService(sirenIntent)
-                }
-            )
+                )
+            } else {
+                WakeUpCheckScreen(
+                    currentCheck = currentCheckNumber,
+                    totalChecks = totalChecksNumber,
+                    onTimeout = {
+                        triggerCheckFailurePenalty(alarm)
+                    }
+                )
+            }
         } else if (alarm != null) {
             AlarmWorkflowScreen(alarm)
         } else {
@@ -193,18 +222,55 @@ class AlarmTriggerActivity : ComponentActivity() {
         }
     }
 
+    private fun confirmAwakeSuccess() {
+        isLockdownActive = false
+        getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("is_lockdown_active", false)
+            .apply()
+
+        val serviceIntent = Intent(this@AlarmTriggerActivity, WakeUpSurveillanceService::class.java).apply {
+            action = WakeUpSurveillanceService.ACTION_CONFIRM_AWAKE
+        }
+        startService(serviceIntent)
+        finish()
+    }
+
+    private fun triggerCheckFailurePenalty(alarm: AlarmEntity?) {
+        isWakeUpCheck = false
+        failedCheckIndex = currentCheckNumber.coerceAtLeast(1)
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putInt("failed_check_index", failedCheckIndex).apply()
+
+        val sirenIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
+            action = AlarmForegroundService.ACTION_START_ALARM
+            putExtra(AlarmForegroundService.EXTRA_ALARM_ID, alarm?.id ?: alarmId)
+            putExtra("FAILED_CHECK_INDEX", failedCheckIndex)
+        }
+        startService(sirenIntent)
+    }
+
     @Composable
     private fun AlarmWorkflowScreen(alarm: AlarmEntity) {
-        var isDismissedToMission by remember { mutableStateOf(false) }
+        var isDismissed by remember { mutableStateOf(false) }
+        var isQrVerified by remember { mutableStateOf(alarm.qrPayload.isBlank() || isPunishment) }
 
-        if (!isDismissedToMission && !isPunishment) {
+        if (!isDismissed && !isPunishment) {
             RingingAlarmScreen(
+                hasQr = alarm.qrPayload.isNotBlank(),
                 onDismiss = {
-                    isDismissedToMission = true
+                    isDismissed = true
                     val muteIntent = Intent(this@AlarmTriggerActivity, AlarmForegroundService::class.java).apply {
                         action = AlarmForegroundService.ACTION_MUTE_TEMPORARY
                     }
                     startService(muteIntent)
+                }
+            )
+        } else if (!isQrVerified) {
+            InitialAlarmQrScannerScreen(
+                expectedPayload = alarm.qrPayload,
+                onVerified = {
+                    isQrVerified = true
                 }
             )
         } else {
@@ -213,7 +279,7 @@ class AlarmTriggerActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun RingingAlarmScreen(onDismiss: () -> Unit) {
+    private fun RingingAlarmScreen(hasQr: Boolean, onDismiss: () -> Unit) {
         val infiniteTransition = rememberInfiniteTransition(label = "alarmPulse")
         val pulseScale by infiniteTransition.animateFloat(
             initialValue = 0.92f,
@@ -248,13 +314,16 @@ class AlarmTriggerActivity : ComponentActivity() {
                 Text(
                     text = if (failedCheckIndex > 0) {
                         "CHECK #$failedCheckIndex MISSED // ${failedCheckIndex + 2}X PENALTY ARMED"
+                    } else if (hasQr) {
+                        "DISMISS TO SCAN DESK QR & UNLOCK MISSION"
                     } else {
                         "DISMISS TO START CALM SOLVING"
                     },
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = if (failedCheckIndex > 0) ThreatCrimson else LaserGreen,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(60.dp))
 
@@ -267,15 +336,308 @@ class AlarmTriggerActivity : ComponentActivity() {
                     colors = ButtonDefaults.buttonColors(containerColor = ThreatCrimson)
                 ) {
                     Text(
-                        text = "DISMISS &\nSOLVE MISSION",
+                        text = if (hasQr) "DISMISS &\nSCAN DESK QR" else "DISMISS &\nSOLVE MISSION",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
+                        fontSize = 17.sp,
                         color = TextPrimary,
                         textAlign = TextAlign.Center
                     )
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun InitialAlarmQrScannerScreen(
+        expectedPayload: String,
+        onVerified: () -> Unit
+    ) {
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        var mismatchWarning by remember { mutableStateOf<String?>(null) }
+
+        CameraQrScannerView(
+            headerTitle = "DESK ANCHOR SCANNER",
+            subTitle = "SCAN REGISTERED DESK QR TO UNLOCK MATH MISSION",
+            mismatchWarning = mismatchWarning,
+            onScanned = { scannedData ->
+                if (scannedData.trim() == expectedPayload.trim()) {
+                    vibrateSuccess(vibrator)
+                    onVerified()
+                } else {
+                    vibrateError(vibrator)
+                    mismatchWarning = "TARGET MISMATCH // SCAN REGISTERED DESK QR"
+                }
+            }
+        )
+    }
+
+    @Composable
+    private fun WakeUpQrScannerScreen(
+        currentCheck: Int,
+        totalChecks: Int,
+        expectedPayload: String,
+        onVerified: () -> Unit,
+        onTimeout: () -> Unit
+    ) {
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        var checkTimeLeft by remember { mutableIntStateOf(45) } // 45s Safe Buffer for QR
+        var mismatchWarning by remember { mutableStateOf<String?>(null) }
+
+        LaunchedEffect(Unit) {
+            while (checkTimeLeft > 0) {
+                delay(1000L)
+                checkTimeLeft--
+            }
+            onTimeout()
+        }
+
+        CameraQrScannerView(
+            headerTitle = "CHECK $currentCheck OF $totalChecks // QR REQUIRED",
+            subTitle = "REMAINING TIME: ${checkTimeLeft}s (ALIGN WITH DESK QR)",
+            timeLeftRatio = checkTimeLeft / 45f,
+            mismatchWarning = mismatchWarning,
+            onScanned = { scannedData ->
+                if (scannedData.trim() == expectedPayload.trim()) {
+                    vibrateSuccess(vibrator)
+                    onVerified()
+                } else {
+                    vibrateError(vibrator)
+                    mismatchWarning = "TARGET MISMATCH // SCAN REGISTERED DESK QR"
+                }
+            }
+        )
+    }
+
+    @Composable
+    private fun CameraQrScannerView(
+        headerTitle: String,
+        subTitle: String,
+        timeLeftRatio: Float? = null,
+        mismatchWarning: String? = null,
+        onScanned: (String) -> Unit
+    ) {
+        val context = LocalContext.current
+        val lifecycleOwner = LocalLifecycleOwner.current
+        var hasCameraPermission by remember {
+            mutableStateOf(
+                ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            )
+        }
+        val permissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            hasCameraPermission = granted
+        }
+
+        LaunchedEffect(Unit) {
+            if (!hasCameraPermission) {
+                permissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
+
+        var isTorchOn by remember { mutableStateOf(true) } // Auto-Torch ON on start
+        var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(PureBlack)
+        ) {
+            if (hasCameraPermission) {
+                AndroidView(
+                    factory = { ctx ->
+                        val previewView = PreviewView(ctx)
+                        val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                        cameraProviderFuture.addListener({
+                            val cameraProvider = cameraProviderFuture.get()
+                            val preview = Preview.Builder().build().also {
+                                it.setSurfaceProvider(previewView.surfaceProvider)
+                            }
+
+                            val options = BarcodeScannerOptions.Builder()
+                                .setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
+                                .build()
+                            val scanner = BarcodeScanning.getClient(options)
+
+                            val analysis = ImageAnalysis.Builder()
+                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                .build()
+
+                            analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
+                                processImageProxy(scanner, imageProxy, onScanned)
+                            }
+
+                            try {
+                                cameraProvider.unbindAll()
+                                val cam = cameraProvider.bindToLifecycle(
+                                    lifecycleOwner,
+                                    CameraSelector.DEFAULT_BACK_CAMERA,
+                                    preview,
+                                    analysis
+                                )
+                                cameraControl = cam.cameraControl
+                                cam.cameraControl.enableTorch(true)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }, ContextCompat.getMainExecutor(ctx))
+                        previewView
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // High-Tech Scanner Reticle Overlay
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(260.dp)
+                            .border(
+                                width = 2.dp,
+                                color = if (mismatchWarning != null) ThreatCrimson else LaserGreen,
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                    )
+                }
+
+                // Controls & Guidance Overlay
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = headerTitle,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = LaserGreen,
+                        letterSpacing = 1.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = subTitle,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TextPrimary,
+                        textAlign = TextAlign.Center
+                    )
+
+                    if (timeLeftRatio != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { timeLeftRatio },
+                            modifier = Modifier
+                                .fillMaxWidth(0.7f)
+                                .height(4.dp),
+                            color = if (timeLeftRatio <= 0.25f) ThreatCrimson else LaserGreen,
+                            trackColor = SubtleBorder
+                        )
+                    }
+
+                    if (mismatchWarning != null) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = mismatchWarning,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = ThreatCrimson,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    // Manual Flashlight Toggle Button
+                    IconButton(
+                        onClick = {
+                            isTorchOn = !isTorchOn
+                            cameraControl?.enableTorch(isTorchOn)
+                        },
+                        modifier = Modifier
+                            .size(56.dp)
+                            .background(DarkSurface, CircleShape)
+                            .border(1.dp, SubtleBorder, CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = if (isTorchOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
+                            contentDescription = "Torch Toggle",
+                            tint = if (isTorchOn) LaserGreen else TextMuted
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (isTorchOn) "TORCH ACTIVE" else "TORCH OFF",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "CAMERA PERMISSION REQUIRED",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = ThreatCrimson
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Wakelock requires camera access to scan your registered Desk QR.",
+                        fontSize = 12.sp,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                        colors = ButtonDefaults.buttonColors(containerColor = LaserGreen)
+                    ) {
+                        Text("GRANT CAMERA ACCESS", color = PureBlack, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalGetImage::class)
+    private fun processImageProxy(
+        scanner: com.google.mlkit.vision.barcode.BarcodeScanner,
+        imageProxy: ImageProxy,
+        onScanned: (String) -> Unit
+    ) {
+        val mediaImage = imageProxy.image
+        if (mediaImage != null) {
+            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            scanner.process(image)
+                .addOnSuccessListener { barcodes ->
+                    for (barcode in barcodes) {
+                        val raw = barcode.rawValue
+                        if (!raw.isNullOrBlank()) {
+                            onScanned(raw)
+                            break
+                        }
+                    }
+                }
+                .addOnCompleteListener {
+                    imageProxy.close()
+                }
+        } else {
+            imageProxy.close()
         }
     }
 
@@ -361,17 +723,7 @@ class AlarmTriggerActivity : ComponentActivity() {
 
                 Button(
                     onClick = {
-                        isLockdownActive = false
-                        getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-                            .edit()
-                            .putBoolean("is_lockdown_active", false)
-                            .apply()
-
-                        val serviceIntent = Intent(this@AlarmTriggerActivity, WakeUpSurveillanceService::class.java).apply {
-                            action = WakeUpSurveillanceService.ACTION_CONFIRM_AWAKE
-                        }
-                        startService(serviceIntent)
-                        finish()
+                        confirmAwakeSuccess()
                     },
                     modifier = Modifier
                         .size(220.dp)
@@ -685,6 +1037,14 @@ class AlarmTriggerActivity : ComponentActivity() {
                 startService(surveillanceIntent)
             }
             finish()
+        }
+    }
+
+    private fun vibrateSuccess(vibrator: Vibrator) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            vibrator.vibrate(120)
         }
     }
 
