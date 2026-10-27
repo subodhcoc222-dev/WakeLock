@@ -19,6 +19,7 @@ import com.anekar.wakelock.util.NotificationHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class PunishmentGauntletService : Service() {
 
@@ -45,7 +46,7 @@ class PunishmentGauntletService : Service() {
             "WAKELOCK::PunishmentGauntletWakeLock"
         ).apply {
             setReferenceCounted(false)
-            acquire(48 * 60 * 60 * 1000L) // Holds wake lock across gauntlet duration
+            acquire(48 * 60 * 60 * 1000L)
         }
     }
 
@@ -67,13 +68,15 @@ class PunishmentGauntletService : Service() {
                     prefs.edit()
                         .putBoolean("is_punishment_active", true)
                         .putLong("active_alarm_id", alarm?.id ?: -1L)
-                        .putInt("punishment_current_round", 1) // Always starts at Round 1
+                        .putInt("punishment_current_round", 1)
                         .putInt("punishment_total_rounds", alarm?.penaltyRoundsCount ?: 100)
                         .putLong("punishment_cooldown_end_time", cooldownEndTime)
                         .apply()
 
-                    audioHijackManager.startAlarmTone(alarm?.ringtoneUri)
-                    launchPunishmentScreen(alarm?.id ?: -1L)
+                    withContext(Dispatchers.Main) {
+                        audioHijackManager.startAlarmTone(alarm?.ringtoneUri)
+                        launchPunishmentScreen(alarm?.id ?: -1L)
+                    }
                 }
 
                 startForegroundServiceNotification()
@@ -84,7 +87,9 @@ class PunishmentGauntletService : Service() {
                 CoroutineScope(Dispatchers.IO).launch {
                     val db = WakelockDatabase.getDatabase(applicationContext)
                     val alarm = if (alarmId > 0) db.alarmDao().getAlarmById(alarmId) else null
-                    audioHijackManager.startAlarmTone(alarm?.ringtoneUri)
+                    withContext(Dispatchers.Main) {
+                        audioHijackManager.startAlarmTone(alarm?.ringtoneUri)
+                    }
                 }
             }
 
@@ -120,7 +125,7 @@ class PunishmentGauntletService : Service() {
         val notification = NotificationCompat.Builder(this, NotificationHelper.CHANNEL_ALARM_ID)
             .setSmallIcon(R.drawable.ic_lock_alarm)
             .setContentTitle("WAKELOCK // PUNISHMENT GAUNTLET ACTIVE")
-            .setContentText("Tamper violation triggered. Complete 100 rounds to unlock.")
+            .setContentText("Tamper violation triggered. Complete math rounds to unlock.")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
