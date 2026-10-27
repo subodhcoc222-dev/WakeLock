@@ -11,6 +11,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
@@ -39,10 +41,18 @@ data class PermissionState(
     val hasDeviceAdmin: Boolean,
     val hasNotification: Boolean,
     val hasAccessibility: Boolean,
+    val hasCamera: Boolean,
     val isAutoStartAcknowledged: Boolean
 ) {
     val isAllGranted: Boolean
-        get() = hasOverlay && hasExactAlarm && hasBatteryOpt && hasDeviceAdmin && hasNotification && hasAccessibility && isAutoStartAcknowledged
+        get() = hasOverlay && 
+                hasExactAlarm && 
+                hasBatteryOpt && 
+                hasDeviceAdmin && 
+                hasNotification && 
+                hasAccessibility && 
+                hasCamera && 
+                isAutoStartAcknowledged
 }
 
 fun checkPermissions(context: Context): PermissionState {
@@ -74,6 +84,11 @@ fun checkPermissions(context: Context): PermissionState {
         ) == PackageManager.PERMISSION_GRANTED
     } else true
 
+    val hasCamera = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.CAMERA
+    ) == PackageManager.PERMISSION_GRANTED
+
     val expectedServiceName = "${context.packageName}/${AntiForceStopService::class.java.canonicalName}"
     val enabledServices = Settings.Secure.getString(
         context.contentResolver,
@@ -82,19 +97,26 @@ fun checkPermissions(context: Context): PermissionState {
     val hasAccessibility = enabledServices.contains(expectedServiceName)
 
     return PermissionState(
-        hasOverlay,
-        hasExactAlarm,
-        hasBatteryOpt,
-        hasDeviceAdmin,
-        hasNotification,
-        hasAccessibility,
-        isAutoStartAck
+        hasOverlay = hasOverlay,
+        hasExactAlarm = hasExactAlarm,
+        hasBatteryOpt = hasBatteryOpt,
+        hasDeviceAdmin = hasDeviceAdmin,
+        hasNotification = hasNotification,
+        hasAccessibility = hasAccessibility,
+        hasCamera = hasCamera,
+        isAutoStartAcknowledged = isAutoStartAck
     )
 }
 
 @Composable
 fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
     val context = LocalContext.current
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        onRefresh()
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -187,7 +209,18 @@ fun PermissionAuditCards(state: PermissionState, onRefresh: () -> Unit) {
             }
         }
 
-        // 6. OEM Auto-Start & Background Activity Card (2-Step Explicit Confirmation)
+        // 6. Camera Hardware Card (Desk QR & Scanner)
+        AnimatedVisibility(visible = !state.hasCamera, exit = fadeOut() + shrinkVertically()) {
+            AuditCard(
+                title = "CAMERA (DESK QR SCANNER)",
+                description = "Desk QR anchor scan karne aur automatic torch activation ke liye camera access anivarya hai.",
+                actionText = "GRANT CAMERA ACCESS"
+            ) {
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
+
+        // 7. OEM Auto-Start & Background Activity Card (2-Step Explicit Confirmation)
         AnimatedVisibility(visible = !state.isAutoStartAcknowledged, exit = fadeOut() + shrinkVertically()) {
             Card(
                 modifier = Modifier
