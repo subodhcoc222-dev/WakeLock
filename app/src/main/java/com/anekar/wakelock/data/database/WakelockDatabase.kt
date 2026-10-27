@@ -11,7 +11,7 @@ import com.anekar.wakelock.data.model.Converters
 
 @Database(
     entities = [AlarmEntity::class],
-    version = 5,
+    version = 6, // Bumped to 6 for Penalty Rounds & Cooldown columns
     exportSchema = false
 )
 @TypeConverters(Converters::class)
