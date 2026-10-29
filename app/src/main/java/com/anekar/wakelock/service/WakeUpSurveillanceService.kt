@@ -1,5 +1,6 @@
 package com.anekar.wakelock.service
 
+import android.app.AlarmManager
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -21,32 +22,29 @@ import com.anekar.wakelock.util.NotificationHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class WakeUpSurveillanceService : Service() {
 
     private lateinit var audioHijackManager: AudioHijackManager
-    private val handler = Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var alarmId: Long = -1L
-    private var taperIntervalSeconds: Int = 0
-    private var taperDurationSeconds: Int = 0
-    private var secondaryIntervalSeconds: Int = 600
-    private var totalDurationSeconds: Int = 7200
-
-    private var taperChecksCount: Int = 0
-    private var secondaryChecksCount: Int = 0
-    private var totalChecksCount: Int = 1
     private var currentCheckIndex: Int = 1
+    private var totalChecksCount: Int = 1
     private var isAwaitingResponse: Boolean = false
 
     companion object {
         const val ACTION_START_SURVEILLANCE = "ACTION_START_SURVEILLANCE"
+        const val ACTION_TRIGGER_CHECK_ALARM = "ACTION_TRIGGER_CHECK_ALARM"
         const val ACTION_CONFIRM_AWAKE = "ACTION_CONFIRM_AWAKE"
         const val ACTION_RESUME_FROM_PENALTY = "ACTION_RESUME_FROM_PENALTY"
         const val ACTION_CANCEL_SURVEILLANCE = "ACTION_CANCEL_SURVEILLANCE"
         const val EXTRA_ALARM_ID = "EXTRA_ALARM_ID"
+
         private const val NOTIFICATION_CHECK_ALERT_ID = 4004
+        private const val PENDING_CHECK_REQUEST_CODE = 8800
     }
 
     override fun onCreate() {
@@ -58,85 +56,88 @@ class WakeUpSurveillanceService : Service() {
             "WAKELOCK::SurveillancePersistentWakeLock"
         ).apply {
             setReferenceCounted(false)
-            acquire(6 * 60 * 60 * 1000L)
+            acquire(12 * 60 * 60 * 1000L)
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action ?: ACTION_START_SURVEILLANCE
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
 
-        when (action) {
+        // 1. ZOMBIE KILL GUARD: If OS revived service with null intent after completion
+        if (intent == null || intent.action == null) {
+            val isStillActive = prefs.getBoolean("is_surveillance_active", false)
+            if (!isStillActive) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            syncStateFromPrefs()
+            startSurveillanceForeground()
+            return START_STICKY
+        }
+
+        syncStateFromPrefs()
+
+        when (intent.action) {
             ACTION_START_SURVEILLANCE -> {
-                val incomingAlarmId = intent?.getLongExtra(EXTRA_ALARM_ID, -1L) ?: -1L
-                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-                val isAlreadyActive = prefs.getBoolean("is_surveillance_active", false)
-                val existingActiveAlarmId = prefs.getLong("active_alarm_id", -1L)
+                val incomingAlarmId = intent.getLongExtra(EXTRA_ALARM_ID, -1L)
+                val targetAlarmId = if (incomingAlarmId != -1L) incomingAlarmId else alarmId
 
-                if (isAlreadyActive && existingActiveAlarmId != -1L && incomingAlarmId != -1L && incomingAlarmId != existingActiveAlarmId) {
-                    return START_STICKY
+                if (targetAlarmId != -1L) {
+                    alarmId = targetAlarmId
+                    currentCheckIndex = 1
+                    initializeAndCalculateSurveillance(targetAlarmId)
+                } else {
+                    stopSelf()
                 }
-                if (isAlreadyActive && alarmId != -1L && alarmId == existingActiveAlarmId) {
-                    return START_STICKY
-                }
-
-                alarmId = if (incomingAlarmId != -1L) incomingAlarmId else existingActiveAlarmId
-                currentCheckIndex = 1
-
-                prefs.edit()
-                    .putBoolean("is_surveillance_active", true)
-                    .putLong("active_alarm_id", alarmId)
-                    .putInt("cached_current_check", 1)
-                    .putInt("failed_check_index", 0)
-                    .apply()
-
-                startSurveillanceForeground()
-                loadAlarmAndBeginSurveillance()
             }
 
-            ACTION_RESUME_FROM_PENALTY -> {
-                // FIXED DEAD LOOP: Resumes next check immediately after penalty math completion
-                isAwaitingResponse = false
-                handler.removeCallbacks(penaltyEscalationRunnable)
-
-                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-                val incomingAlarmId = intent?.getLongExtra(EXTRA_ALARM_ID, -1L) ?: -1L
-                if (alarmId <= 0) {
-                    alarmId = if (incomingAlarmId > 0) incomingAlarmId else prefs.getLong("active_alarm_id", -1L)
-                }
-
-                currentCheckIndex++
-                prefs.edit()
-                    .putBoolean("is_surveillance_active", true)
-                    .putInt("cached_current_check", currentCheckIndex)
-                    .putInt("failed_check_index", 0)
-                    .apply()
-
-                startSurveillanceForeground()
-
-                if (totalChecksCount <= 1 || secondaryIntervalSeconds <= 0) {
-                    loadAlarmAndBeginSurveillance()
-                } else if (currentCheckIndex <= totalChecksCount) {
-                    scheduleNextCheck()
-                } else {
+            ACTION_TRIGGER_CHECK_ALARM -> {
+                val isStillActive = prefs.getBoolean("is_surveillance_active", false)
+                if (!isStillActive || currentCheckIndex > totalChecksCount) {
                     terminateSurveillance()
+                } else {
+                    triggerCheckAlert()
                 }
             }
 
             ACTION_CONFIRM_AWAKE -> {
                 isAwaitingResponse = false
-                handler.removeCallbacks(penaltyEscalationRunnable)
+                mainHandler.removeCallbacks(penaltyEscalationRunnable)
 
                 val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.cancel(NOTIFICATION_CHECK_ALERT_ID)
 
-                currentCheckIndex++
-                val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-                prefs.edit().putInt("cached_current_check", currentCheckIndex).apply()
-
-                if (currentCheckIndex <= totalChecksCount) {
-                    scheduleNextCheck()
-                } else {
+                // 2. CRITICAL EXIT GUARD: Advance or Terminate
+                if (currentCheckIndex >= totalChecksCount) {
                     terminateSurveillance()
+                } else {
+                    currentCheckIndex++
+                    prefs.edit().putInt("cached_current_check", currentCheckIndex).apply()
+                    startSurveillanceForeground()
+                    scheduleNextHardwareCheck()
+                }
+            }
+
+            ACTION_RESUME_FROM_PENALTY -> {
+                isAwaitingResponse = false
+                mainHandler.removeCallbacks(penaltyEscalationRunnable)
+
+                val incomingAlarmId = intent.getLongExtra(EXTRA_ALARM_ID, -1L)
+                if (incomingAlarmId > 0) alarmId = incomingAlarmId
+
+                if (currentCheckIndex >= totalChecksCount) {
+                    terminateSurveillance()
+                } else {
+                    currentCheckIndex++
+                    prefs.edit()
+                        .putBoolean("is_surveillance_active", true)
+                        .putInt("cached_current_check", currentCheckIndex)
+                        .putInt("failed_check_index", 0)
+                        .apply()
+
+                    startSurveillanceForeground()
+                    scheduleNextHardwareCheck()
                 }
             }
 
@@ -147,94 +148,109 @@ class WakeUpSurveillanceService : Service() {
         return START_STICKY
     }
 
-    private fun startSurveillanceForeground() {
-        val notification = NotificationCompat.Builder(this, NotificationHelper.CHANNEL_SURVEILLANCE_ID)
-            .setSmallIcon(R.drawable.ic_lock_alarm)
-            .setContentTitle("WAKELOCK // SURVEILLANCE ARMED")
-            .setContentText("Active awake surveillance cycle in progress.")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setOngoing(true)
-            .build()
+    private fun syncStateFromPrefs() {
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+        alarmId = prefs.getLong("active_alarm_id", alarmId)
+        currentCheckIndex = prefs.getInt("cached_current_check", currentCheckIndex)
+        totalChecksCount = prefs.getInt("cached_total_checks", totalChecksCount).coerceAtLeast(1)
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ServiceCompat.startForeground(
-                this,
-                NotificationHelper.NOTIFICATION_SURVEILLANCE_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+    private fun initializeAndCalculateSurveillance(targetId: Long) {
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val db = WakelockDatabase.getDatabase(applicationContext)
+            val alarm = db.alarmDao().getAlarmById(targetId) ?: return@launch
+
+            val taperInterval = alarm.taperIntervalSeconds
+            val taperDuration = alarm.taperDurationSeconds
+            val secondaryInterval = alarm.wakeUpIntervalSeconds.coerceAtLeast(10)
+            val totalDuration = alarm.wakeUpTotalDurationSeconds.coerceAtLeast(10)
+
+            val calculatedChecks = if (taperInterval > 0 && taperDuration > 0) {
+                val effectiveTaper = taperDuration.coerceAtMost(totalDuration)
+                val tCount = effectiveTaper / taperInterval
+                val remainingSec = (totalDuration - effectiveTaper).coerceAtLeast(0)
+                val sCount = remainingSec / secondaryInterval
+                (tCount + sCount).coerceAtLeast(1)
+            } else {
+                (totalDuration / secondaryInterval).coerceAtLeast(1)
+            }
+
+            currentCheckIndex = 1
+            totalChecksCount = calculatedChecks
+
+            prefs.edit()
+                .putBoolean("is_surveillance_active", true)
+                .putLong("active_alarm_id", targetId)
+                .putInt("cached_current_check", 1)
+                .putInt("cached_total_checks", totalChecksCount)
+                .putInt("failed_check_index", 0)
+                .apply()
+
+            val now = System.currentTimeMillis()
+            db.alarmDao().updateSurveillanceState(
+                id = targetId,
+                isActive = true,
+                startTime = now,
+                endTime = now + (totalDuration * 1000L),
+                nextCheck = now + (taperInterval.takeIf { it > 0 } ?: secondaryInterval) * 1000L
             )
-        } else {
-            startForeground(NotificationHelper.NOTIFICATION_SURVEILLANCE_ID, notification)
+
+            withContext(Dispatchers.Main) {
+                startSurveillanceForeground()
+                scheduleNextHardwareCheck()
+            }
         }
     }
 
-    private fun loadAlarmAndBeginSurveillance() {
+    private fun scheduleNextHardwareCheck() {
+        val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("is_surveillance_active", false)) return
+
         CoroutineScope(Dispatchers.IO).launch {
             val db = WakelockDatabase.getDatabase(applicationContext)
             val alarm = db.alarmDao().getAlarmById(alarmId) ?: return@launch
 
-            taperIntervalSeconds = alarm.taperIntervalSeconds
-            taperDurationSeconds = alarm.taperDurationSeconds
-            secondaryIntervalSeconds = alarm.wakeUpIntervalSeconds.coerceAtLeast(10)
-            totalDurationSeconds = alarm.wakeUpTotalDurationSeconds.coerceAtLeast(10)
+            val taperInterval = alarm.taperIntervalSeconds
+            val taperDuration = alarm.taperDurationSeconds
+            val taperCheckCount = if (taperInterval > 0 && taperDuration > 0) taperDuration / taperInterval else 0
 
-            val isTaperActive = taperIntervalSeconds > 0 && taperDurationSeconds > 0
-
-            if (isTaperActive) {
-                val effectiveTaperDuration = taperDurationSeconds.coerceAtMost(totalDurationSeconds)
-                taperChecksCount = (effectiveTaperDuration / taperIntervalSeconds).coerceAtLeast(1)
-
-                val remainingDuration = totalDurationSeconds - effectiveTaperDuration
-                secondaryChecksCount = if (remainingDuration > 0) {
-                    (remainingDuration / secondaryIntervalSeconds).coerceAtLeast(0)
-                } else {
-                    0
-                }
-                totalChecksCount = (taperChecksCount + secondaryChecksCount).coerceAtLeast(1)
+            val intervalSeconds = if (currentCheckIndex <= taperCheckCount && taperInterval > 0) {
+                taperInterval
             } else {
-                taperChecksCount = 0
-                secondaryChecksCount = (totalDurationSeconds / secondaryIntervalSeconds).coerceAtLeast(1)
-                totalChecksCount = secondaryChecksCount
+                alarm.wakeUpIntervalSeconds.coerceAtLeast(10)
             }
 
-            val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
-            prefs.edit()
-                .putInt("cached_current_check", currentCheckIndex)
-                .putInt("cached_total_checks", totalChecksCount)
-                .apply()
+            val triggerAtMillis = System.currentTimeMillis() + (intervalSeconds * 1000L)
 
-            val startTime = System.currentTimeMillis()
-            val endTime = startTime + (totalDurationSeconds * 1000L)
-            val initialDelay = getIntervalForNextCheck(currentCheckIndex)
+            // HARDWARE ALARM CLOCK (Wakes up Samsung One UI Deep Sleep 100% reliably)
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val intent = Intent(applicationContext, WakeUpSurveillanceService::class.java).apply {
+                action = ACTION_TRIGGER_CHECK_ALARM
+            }
 
-            db.alarmDao().updateSurveillanceState(
-                id = alarmId,
-                isActive = true,
-                startTime = startTime,
-                endTime = endTime,
-                nextCheck = startTime + (initialDelay * 1000L)
+            val pendingIntent = PendingIntent.getService(
+                applicationContext,
+                PENDING_CHECK_REQUEST_CODE,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            scheduleNextCheck()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setExact(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
+            }
         }
-    }
-
-    private fun getIntervalForNextCheck(checkIndex: Int): Int {
-        return if (taperIntervalSeconds > 0 && checkIndex <= taperChecksCount) {
-            taperIntervalSeconds
-        } else {
-            secondaryIntervalSeconds
-        }
-    }
-
-    private fun scheduleNextCheck() {
-        handler.removeCallbacks(checkTriggerRunnable)
-        val delaySec = getIntervalForNextCheck(currentCheckIndex)
-        handler.postDelayed(checkTriggerRunnable, delaySec * 1000L)
-    }
-
-    private val checkTriggerRunnable = Runnable {
-        triggerCheckAlert()
     }
 
     private fun triggerCheckAlert() {
@@ -259,7 +275,6 @@ class WakeUpSurveillanceService : Service() {
             )
         }
 
-        // UNIVERSAL FULL-SCREEN INTENT (Wakes up lock-screens across Xiaomi, Oppo, Vivo, Samsung, Stock Android)
         val pendingIntent = PendingIntent.getActivity(
             this,
             NOTIFICATION_CHECK_ALERT_ID,
@@ -287,18 +302,16 @@ class WakeUpSurveillanceService : Service() {
             e.printStackTrace()
         }
 
-        handler.postDelayed(penaltyEscalationRunnable, 30 * 1000L)
+        mainHandler.removeCallbacks(penaltyEscalationRunnable)
+        mainHandler.postDelayed(penaltyEscalationRunnable, 45 * 1000L) // 45s response window
     }
 
     private val penaltyEscalationRunnable = Runnable {
         if (isAwaitingResponse) {
             isAwaitingResponse = false
-            handler.removeCallbacks(checkTriggerRunnable)
 
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.cancel(NOTIFICATION_CHECK_ALERT_ID)
-
-            stopForeground(STOP_FOREGROUND_REMOVE)
 
             val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
             prefs.edit().putInt("failed_check_index", currentCheckIndex).apply()
@@ -312,28 +325,71 @@ class WakeUpSurveillanceService : Service() {
         }
     }
 
+    private fun startSurveillanceForeground() {
+        val notification = NotificationCompat.Builder(this, NotificationHelper.CHANNEL_SURVEILLANCE_ID)
+            .setSmallIcon(R.drawable.ic_lock_alarm)
+            .setContentTitle("WAKELOCK // SURVEILLANCE ARMED")
+            .setContentText("Check $currentCheckIndex of $totalChecksCount in progress.")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NotificationHelper.NOTIFICATION_SURVEILLANCE_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NotificationHelper.NOTIFICATION_SURVEILLANCE_ID, notification)
+        }
+    }
+
     private fun terminateSurveillance() {
-        handler.removeCallbacksAndMessages(null)
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.cancel(NOTIFICATION_CHECK_ALERT_ID)
+        mainHandler.removeCallbacksAndMessages(null)
+
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val cancelIntent = Intent(applicationContext, WakeUpSurveillanceService::class.java).apply {
+            action = ACTION_TRIGGER_CHECK_ALARM
+        }
+        val pendingIntent = PendingIntent.getService(
+            applicationContext,
+            PENDING_CHECK_REQUEST_CODE,
+            cancelIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(pendingIntent)
 
         val prefs = getSharedPreferences("wakelock_prefs", Context.MODE_PRIVATE)
         prefs.edit()
             .putBoolean("is_surveillance_active", false)
+            .putBoolean("is_lockdown_active", false)
             .putInt("cached_current_check", 1)
+            .putInt("cached_total_checks", 1)
             .putInt("failed_check_index", 0)
+            .putLong("active_alarm_id", -1L)
             .apply()
 
         CoroutineScope(Dispatchers.IO).launch {
             val db = WakelockDatabase.getDatabase(applicationContext)
             db.alarmDao().updateSurveillanceState(alarmId, false, 0L, 0L, 0L)
         }
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancel(NOTIFICATION_CHECK_ALERT_ID)
+        notificationManager.cancel(NotificationHelper.NOTIFICATION_SURVEILLANCE_ID)
+
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
+
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
+        mainHandler.removeCallbacksAndMessages(null)
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
